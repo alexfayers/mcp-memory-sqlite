@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { run_migrations } from './migrations/run.js';
 import { Entity, Relation, SearchResult } from '../types/index.js';
 
 // Types for configuration
@@ -459,54 +460,7 @@ export class DatabaseManager {
 
 	public async initialize() {
 		try {
-			// Create tables if they don't exist
-			this.db.exec(`
-				CREATE TABLE IF NOT EXISTS entities (
-					name TEXT PRIMARY KEY,
-					entity_type TEXT NOT NULL,
-					created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-				);
-			`);
-
-			this.db.exec(`
-				CREATE TABLE IF NOT EXISTS observations (
-					id INTEGER PRIMARY KEY AUTOINCREMENT,
-					entity_name TEXT NOT NULL,
-					content TEXT NOT NULL,
-					created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-					FOREIGN KEY (entity_name) REFERENCES entities(name)
-				);
-			`);
-
-			this.db.exec(`
-				CREATE TABLE IF NOT EXISTS relations (
-					id INTEGER PRIMARY KEY AUTOINCREMENT,
-					source TEXT NOT NULL,
-					target TEXT NOT NULL,
-					relation_type TEXT NOT NULL,
-					created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-					FOREIGN KEY (source) REFERENCES entities(name),
-					FOREIGN KEY (target) REFERENCES entities(name),
-					UNIQUE(source, target, relation_type)
-				);
-			`);
-
-			// Create indexes
-			this.db.exec(`
-				CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);
-			`);
-
-			this.db.exec(`
-				CREATE INDEX IF NOT EXISTS idx_observations_entity ON observations(entity_name);
-			`);
-
-			this.db.exec(`
-				CREATE INDEX IF NOT EXISTS idx_relations_source ON relations(source);
-			`);
-
-			this.db.exec(`
-				CREATE INDEX IF NOT EXISTS idx_relations_target ON relations(target);
-			`);
+			run_migrations(this.db);
 		} catch (error) {
 			throw new Error(
 				`Database initialization failed: ${
