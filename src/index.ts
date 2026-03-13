@@ -59,6 +59,16 @@ const GetEntityWithRelationsSchema = v.object({
 	name: v.string(),
 });
 
+const AddObservationsSchema = v.object({
+	entityName: v.string(),
+	observations: v.array(v.string()),
+});
+
+const DeleteObservationsSchema = v.object({
+	entityName: v.string(),
+	observations: v.array(v.string()),
+});
+
 function setupTools(server: McpServer<any>, db: DatabaseManager) {
 	// Tool: Create Entities
 	server.tool<typeof CreateEntitiesSchema>(
@@ -334,6 +344,93 @@ function setupTools(server: McpServer<any>, db: DatabaseManager) {
 						{
 							type: 'text' as const,
 							text: JSON.stringify(result, null, 2),
+						},
+					],
+				};
+			} catch (error) {
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: JSON.stringify(
+								{
+									error: 'internal_error',
+									message:
+										error instanceof Error
+											? error.message
+											: 'Unknown error',
+								},
+								null,
+								2,
+							),
+						},
+					],
+					isError: true,
+				};
+			}
+		},
+	);
+
+	// Tool: Add Observations
+	server.tool<typeof AddObservationsSchema>(
+		{
+			name: 'add_observations',
+			description:
+				'Append observations to an existing entity without overwriting existing ones. Skips duplicate observations. Throws if the entity does not exist.',
+			schema: AddObservationsSchema,
+		},
+		async ({ entityName, observations }) => {
+			try {
+				const added = await db.add_observations(entityName, observations);
+				const skipped = observations.length - added;
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: `Added ${added} observations to entity "${entityName}"${skipped > 0 ? ` (${skipped} duplicate${skipped === 1 ? '' : 's'} skipped)` : ''}`,
+						},
+					],
+				};
+			} catch (error) {
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: JSON.stringify(
+								{
+									error: 'internal_error',
+									message:
+										error instanceof Error
+											? error.message
+											: 'Unknown error',
+								},
+								null,
+								2,
+							),
+						},
+					],
+					isError: true,
+				};
+			}
+		},
+	);
+
+	// Tool: Delete Observations
+	server.tool<typeof DeleteObservationsSchema>(
+		{
+			name: 'delete_observations',
+			description:
+				'Delete specific observations from an existing entity by content match. Returns the count of deleted observations. Throws if the entity does not exist.',
+			schema: DeleteObservationsSchema,
+		},
+		async ({ entityName, observations }) => {
+			try {
+				const deleted = await db.delete_observations(entityName, observations);
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: `Deleted ${deleted} observation${deleted === 1 ? '' : 's'} from entity "${entityName}"`,
 						},
 					],
 				};

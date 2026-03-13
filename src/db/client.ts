@@ -135,6 +135,88 @@ export class DatabaseManager {
 		}
 	}
 
+	async add_observations(
+		entityName: string,
+		observations: string[],
+	): Promise<number> {
+		try {
+			const existing = this.db
+				.prepare('SELECT name FROM entities WHERE name = ?')
+				.get(entityName);
+
+			if (!existing) {
+				throw new Error(`Entity not found: ${entityName}`);
+			}
+
+			const existing_obs = this.db
+				.prepare(
+					'SELECT content FROM observations WHERE entity_name = ?',
+				)
+				.all(entityName) as Array<{ content: string }>;
+
+			const existing_set = new Set(existing_obs.map((r) => r.content));
+			const new_observations = observations.filter(
+				(o) => !existing_set.has(o),
+			);
+
+			if (new_observations.length > 0) {
+				const insert = this.db.prepare(
+					'INSERT INTO observations (entity_name, content) VALUES (?, ?)',
+				);
+				const insert_all = this.db.transaction(() => {
+					for (const obs of new_observations) {
+						insert.run(entityName, obs);
+					}
+				});
+				insert_all();
+			}
+
+			return new_observations.length;
+		} catch (error) {
+			throw new Error(
+				`Failed to add observations to "${entityName}": ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			);
+		}
+	}
+
+	async delete_observations(
+		entityName: string,
+		observations: string[],
+	): Promise<number> {
+		try {
+			const existing = this.db
+				.prepare('SELECT name FROM entities WHERE name = ?')
+				.get(entityName);
+
+			if (!existing) {
+				throw new Error(`Entity not found: ${entityName}`);
+			}
+
+			let deleted = 0;
+			const delete_obs = this.db.transaction(() => {
+				for (const obs of observations) {
+					const result = this.db
+						.prepare(
+							'DELETE FROM observations WHERE entity_name = ? AND content = ?',
+						)
+						.run(entityName, obs);
+					deleted += result.changes;
+				}
+			});
+			delete_obs();
+
+			return deleted;
+		} catch (error) {
+			throw new Error(
+				`Failed to delete observations from "${entityName}": ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			);
+		}
+	}
+
 	async get_entity(name: string): Promise<Entity> {
 		const entity_result = this.db
 			.prepare(
