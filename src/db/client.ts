@@ -245,43 +245,20 @@ export class DatabaseManager {
 		query: string,
 		limit: number = 10,
 	): Promise<Entity[]> {
-		// Validate and clamp limit
 		const effective_limit = Math.min(Math.max(1, limit), 50);
 
-		// Normalize query for flexible matching: replace spaces/underscores with wildcards
-		const normalized_query = query.replace(/[\s_-]+/g, '%');
-		const search_pattern = `%${normalized_query}%`;
-
-		// Use relevance scoring: name match (3) > type match (2) > observation match (1)
 		const results = this.db
 			.prepare(
 				`
-        SELECT DISTINCT
-          e.name,
-          e.entity_type,
-          e.created_at,
-          CASE
-            WHEN e.name LIKE ? COLLATE NOCASE THEN 3
-            WHEN e.entity_type LIKE ? COLLATE NOCASE THEN 2
-            ELSE 1
-          END as relevance_score
-        FROM entities e
-        LEFT JOIN observations o ON e.name = o.entity_name
-        WHERE e.name LIKE ? COLLATE NOCASE
-           OR e.entity_type LIKE ? COLLATE NOCASE
-           OR o.content LIKE ? COLLATE NOCASE
-        ORDER BY relevance_score DESC, e.created_at DESC
+        SELECT e.name, e.entity_type, e.created_at
+        FROM entities_fts
+        JOIN entities e ON entities_fts.name = e.name
+        WHERE entities_fts MATCH ?
+        ORDER BY bm25(entities_fts)
         LIMIT ?
       `,
 			)
-			.all(
-				search_pattern,
-				search_pattern,
-				search_pattern,
-				search_pattern,
-				search_pattern,
-				effective_limit,
-			) as Array<{
+			.all(query, effective_limit) as Array<{
 			name: string;
 			entity_type: string;
 		}>;

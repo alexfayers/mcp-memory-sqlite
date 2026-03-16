@@ -35,4 +35,15 @@ export const migrations: Migration[] = [
 			`CREATE INDEX IF NOT EXISTS idx_relations_target ON relations(target)`,
 		],
 	},
+	{
+		version: 2,
+		statements: [
+			`CREATE VIRTUAL TABLE IF NOT EXISTS entities_fts USING fts5(name, entity_type, observations, content='', tokenize='unicode61')`,
+			`INSERT INTO entities_fts(rowid, name, entity_type, observations) SELECT e.rowid, e.name, e.entity_type, COALESCE((SELECT GROUP_CONCAT(content, ' ') FROM observations WHERE entity_name = e.name), '') FROM entities e`,
+			`CREATE TRIGGER IF NOT EXISTS entities_fts_insert AFTER INSERT ON entities BEGIN INSERT INTO entities_fts(rowid, name, entity_type, observations) VALUES (new.rowid, new.name, new.entity_type, ''); END`,
+			`CREATE TRIGGER IF NOT EXISTS entities_fts_delete AFTER DELETE ON entities BEGIN INSERT INTO entities_fts(entities_fts, rowid, name, entity_type, observations) VALUES('delete', old.rowid, old.name, old.entity_type, ''); END`,
+			`CREATE TRIGGER IF NOT EXISTS observations_fts_insert AFTER INSERT ON observations BEGIN INSERT INTO entities_fts(entities_fts, rowid, name, entity_type, observations) VALUES('delete', (SELECT rowid FROM entities WHERE name = new.entity_name), (SELECT name FROM entities WHERE name = new.entity_name), (SELECT entity_type FROM entities WHERE name = new.entity_name), ''); INSERT INTO entities_fts(rowid, name, entity_type, observations) SELECT rowid, name, entity_type, (SELECT GROUP_CONCAT(content, ' ') FROM observations WHERE entity_name = new.entity_name) FROM entities WHERE name = new.entity_name; END`,
+			`CREATE TRIGGER IF NOT EXISTS observations_fts_delete AFTER DELETE ON observations BEGIN INSERT INTO entities_fts(entities_fts, rowid, name, entity_type, observations) VALUES('delete', (SELECT rowid FROM entities WHERE name = old.entity_name), (SELECT name FROM entities WHERE name = old.entity_name), (SELECT entity_type FROM entities WHERE name = old.entity_name), ''); INSERT INTO entities_fts(rowid, name, entity_type, observations) SELECT rowid, name, entity_type, (SELECT GROUP_CONCAT(content, ' ') FROM observations WHERE entity_name = old.entity_name) FROM entities WHERE name = old.entity_name; END`,
+		],
+	},
 ];
