@@ -123,7 +123,7 @@ function setupTools(server: McpServer<any>, db: DatabaseManager) {
 		{
 			name: 'search_nodes',
 			description:
-				'Search entities and relations by text query. Returns up to limit results (default 10, max 50) ordered by relevance.',
+				'Search entities and relations by text query. Returns up to limit results (default 10, max 50) ordered by relevance. Uses FTS5 full-text search with BM25 ranking - supports multi-word queries where terms match independently across name, entity_type, and observations fields.',
 			schema: SearchNodesSchema,
 		},
 		async ({ query, limit }) => {
