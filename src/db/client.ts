@@ -491,6 +491,39 @@ export class DatabaseManager {
 		return { entity, relations, relatedEntities };
 	}
 
+	async search_related_nodes(
+		name: string,
+		entityType?: string,
+		relationType?: string,
+	): Promise<{ entity: Entity; relations: Relation[]; relatedEntities: Entity[] }> {
+		const entity = await this.get_entity(name);
+		let relations = await this.get_relations_for_entities([entity]);
+
+		if (relationType) {
+			relations = relations.filter((r) => r.relationType === relationType);
+		}
+
+		const related_names = new Set<string>();
+		for (const rel of relations) {
+			if (rel.from !== name) related_names.add(rel.from);
+			if (rel.to !== name) related_names.add(rel.to);
+		}
+
+		const relatedEntities: Entity[] = [];
+		for (const related_name of related_names) {
+			try {
+				const related_entity = await this.get_entity(related_name);
+				if (!entityType || related_entity.entityType === entityType) {
+					relatedEntities.push(related_entity);
+				}
+			} catch {
+				// Skip entities that no longer exist
+			}
+		}
+
+		return { entity, relations, relatedEntities };
+	}
+
 	// Graph operations
 	async read_graph(): Promise<{
 		entities: Entity[];

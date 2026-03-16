@@ -69,6 +69,12 @@ const DeleteObservationsSchema = v.object({
 	observations: v.array(v.string()),
 });
 
+const SearchRelatedNodesSchema = v.object({
+	name: v.string(),
+	entityType: v.optional(v.string()),
+	relationType: v.optional(v.string()),
+});
+
 function setupTools(server: McpServer<any>, db: DatabaseManager) {
 	// Tool: Create Entities
 	server.tool<typeof CreateEntitiesSchema>(
@@ -431,6 +437,53 @@ function setupTools(server: McpServer<any>, db: DatabaseManager) {
 						{
 							type: 'text' as const,
 							text: `Deleted ${deleted} observation${deleted === 1 ? '' : 's'} from entity "${entityName}"`,
+						},
+					],
+				};
+			} catch (error) {
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: JSON.stringify(
+								{
+									error: 'internal_error',
+									message:
+										error instanceof Error
+											? error.message
+											: 'Unknown error',
+								},
+								null,
+								2,
+							),
+						},
+					],
+					isError: true,
+				};
+			}
+		},
+	);
+
+	// Tool: Search Related Nodes
+	server.tool<typeof SearchRelatedNodesSchema>(
+		{
+			name: 'search_related_nodes',
+			description:
+				'Get an entity along with all its directly related entities. Optionally filter by entityType (e.g. "task") and/or relationType (e.g. "implements").',
+			schema: SearchRelatedNodesSchema,
+		},
+		async ({ name, entityType, relationType }) => {
+			try {
+				const result = await db.search_related_nodes(
+					name,
+					entityType,
+					relationType,
+				);
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: JSON.stringify(result, null, 2),
 						},
 					],
 				};
