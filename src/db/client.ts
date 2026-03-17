@@ -241,6 +241,14 @@ export class DatabaseManager {
 		};
 	}
 
+	private sanitize_fts_query(query: string): string {
+		return query
+			.trim()
+			.split(/\s+/)
+			.map((token) => `"${token.replace(/"/g, '""')}"`)
+			.join(' ');
+	}
+
 	async search_entities(
 		query: string,
 		limit: number = 10,
@@ -258,7 +266,7 @@ export class DatabaseManager {
         LIMIT ?
       `,
 			)
-			.all(query, effective_limit) as Array<{
+			.all(this.sanitize_fts_query(query), effective_limit) as Array<{
 			name: string;
 			entity_type: string;
 		}>;
