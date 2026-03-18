@@ -2,9 +2,17 @@
 
 This document tracks potential future enhancements for mcp-memory-sqlite based on user feedback and LLM evaluation.
 
-**Current Status:** v0.0.4 - Text search with relevance ranking (8.5/10 rating from LLM evaluation)
+**Current Status:** v0.0.5 - FTS5 search with BM25 ranking and additional tools
 
 ## Recently Completed ✅
+
+### v0.0.5 - FTS5 Upgrade & New Tools
+- ✅ Upgraded `search_nodes` to FTS5 full-text search with BM25 relevance ranking
+- ✅ Added `add_observations` for safe append-only updates (deduplicates, throws if entity missing)
+- ✅ Added `delete_observations` for removing observations by content match
+- ✅ Added `search_related_nodes` for 1-hop graph traversal with entity/relation type filtering
+- ✅ Refactored schema to versioned migration system with `schema_version` table
+- ✅ Sanitized FTS5 query input to prevent operator injection
 
 ### v0.0.4 - Vector Search Removal & Text Search Optimization
 - ✅ Removed non-functional vector search code
@@ -13,8 +21,6 @@ This document tracks potential future enhancements for mcp-memory-sqlite based o
 - ✅ Added `get_entity_with_relations` for graph exploration
 - ✅ Optimized for LLM context efficiency (~12KB saved per entity)
 - ✅ Comprehensive documentation update
-
-**Impact:** Tool rated 8.5/10 by LLM evaluation, with 5/5 search quality rating.
 
 ## High Priority 🔥
 
@@ -305,4 +311,4 @@ New features should meet these standards:
 
 **Last updated:** Based on v0.0.4 LLM evaluation (8.5/10 rating)
 
-**Feedback welcome:** [Open an issue](https://github.com/spences10/mcp-memory-sqlite/issues) with feature suggestions or use case descriptions.
+**Feedback welcome:** [Open an issue](https://github.com/alexfayers/mcp-memory-sqlite/issues) with feature suggestions or use case descriptions.

@@ -1,8 +1,11 @@
 # mcp-memory-sqlite
 
 A personal knowledge graph and memory system for AI assistants using
-SQLite with optimized text search. Perfect for giving Claude (or any
+SQLite with FTS5 full-text search. Perfect for giving Claude (or any
 MCP-compatible AI) persistent memory across conversations!
+
+> Fork of [spences10/mcp-memory-sqlite](https://github.com/spences10/mcp-memory-sqlite)
+> with additional tools and FTS5 search upgrade.
 
 ## Why Use This?
 
@@ -16,23 +19,23 @@ across conversations. Perfect for:
   information about your projects, preferences, and context
 - 🔗 **Relationship Tracking** - Connect ideas, people, projects, and
   concepts
-- 🔍 **Smart Text Search** - Find information using flexible,
-  relevance-ranked text search
+- 🔍 **Smart Text Search** - Find information using FTS5 full-text
+  search with BM25 relevance ranking
 
 ## Features
 
 - **100% Local & Private**: All your data stays on your machine
 - **Easy Setup**: Works out-of-the-box with Claude Desktop
-- **Flexible Text Search**: Case-insensitive search with fuzzy
-  matching that handles different naming conventions
-- **Relevance Ranking**: Results prioritized by name match > type
-  match > observation match
+- **FTS5 Full-Text Search**: Multi-word queries with BM25 relevance
+  ranking
 - **Smart Deduplication**: Automatically prevents duplicate
   relationships
 - **Context-Optimized**: Designed specifically for LLM context
-  efficiency - no unnecessary data bloat
-- **Simple API**: Intuitive tools for creating, searching, and
-  managing your knowledge graph
+  efficiency
+- **Safe Observation Updates**: Append or delete individual
+  observations without overwriting
+- **Graph Traversal**: Explore 1-hop entity relationships filtered by
+  type
 
 ## Quick Start
 
@@ -75,7 +78,9 @@ variable:
 
 ### create_entities
 
-Create or update entities with observations.
+Create or update entities with observations. **Note:** This overwrites
+all existing observations for an entity - use `add_observations` to
+append instead.
 
 **Parameters:**
 
@@ -101,10 +106,51 @@ Create or update entities with observations.
 }
 ```
 
+### add_observations
+
+Append observations to an existing entity without overwriting existing
+ones. Skips duplicate observations. Throws if the entity does not
+exist.
+
+**Parameters:**
+
+- `entityName` (string): Name of the entity to update
+- `observations` (string[]): Observations to add
+
+**Example:**
+
+```json
+{
+	"entityName": "Claude",
+	"observations": ["Supports extended thinking mode"]
+}
+```
+
+### delete_observations
+
+Delete specific observations from an existing entity by content match.
+Returns the count of deleted observations. Throws if the entity does
+not exist.
+
+**Parameters:**
+
+- `entityName` (string): Name of the entity to update
+- `observations` (string[]): Exact observation strings to delete
+
+**Example:**
+
+```json
+{
+	"entityName": "Claude",
+	"observations": ["Focuses on being helpful, harmless, and honest"]
+}
+```
+
 ### search_nodes
 
-Search for entities and their relations using text search with
-relevance ranking.
+Search for entities and their relations using FTS5 full-text search
+with BM25 relevance ranking. Multi-word queries match terms
+independently across entity names, types, and all observations.
 
 **Parameters:**
 
@@ -120,19 +166,6 @@ relevance ranking.
 	"limit": 5
 }
 ```
-
-**Text Search Features:**
-
-- **Case-insensitive**: Searches ignore case differences
-- **Flexible matching**: Automatically handles variations in spacing,
-  underscores, and hyphens
-  - "JavaScript framework" will match "javascript_framework"
-  - "web-development" will match "web_development" or "web
-    development"
-- **Searches across**: Entity names, entity types, and all
-  observations
-- **Relevance ranking**: Results prioritized by where match occurs
-  (name > type > observation)
 
 ### read_graph
 
@@ -167,9 +200,44 @@ source, target, and type) are automatically ignored.
 }
 ```
 
-**Note:** If you attempt to create the same relation multiple times,
-only the first one will be stored. This prevents duplicate
-relationships in your knowledge graph.
+### get_entity_with_relations
+
+Get an entity along with all its relations and directly connected
+entities.
+
+**Parameters:**
+
+- `name` (string): Entity name to retrieve
+
+**Example:**
+
+```json
+{
+	"name": "Claude"
+}
+```
+
+### search_related_nodes
+
+Get an entity along with all its directly related entities. Optionally
+filter by entity type and/or relation type for targeted graph
+traversal.
+
+**Parameters:**
+
+- `name` (string): Entity name to retrieve
+- `entityType` (string, optional): Filter related entities by type
+- `relationType` (string, optional): Filter relations by type
+
+**Example:**
+
+```json
+{
+	"name": "my-project",
+	"entityType": "task",
+	"relationType": "implements"
+}
+```
 
 ### delete_entity
 
@@ -188,30 +256,6 @@ Delete a specific relation between entities.
 - `source` (string): Source entity name
 - `target` (string): Target entity name
 - `type` (string): Relationship type
-
-### get_entity_with_relations
-
-Get an entity along with all its relations and directly connected
-entities. Perfect for exploring the knowledge graph around a specific
-concept.
-
-**Parameters:**
-
-- `name` (string): Entity name to retrieve
-
-**Returns:**
-
-- `entity`: The requested entity
-- `relations`: All relations where this entity is source or target
-- `relatedEntities`: All entities connected to this one
-
-**Example:**
-
-```json
-{
-	"name": "Claude"
-}
-```
 
 ## Usage with Claude Desktop
 
@@ -248,17 +292,14 @@ Add to your Claude Desktop configuration:
 
 ## Database Schema
 
-The tool uses pure SQLite for fast, reliable storage:
-
 ### Tables
 
 - **entities**: Stores entity metadata (name, type, creation time)
 - **observations**: Stores observations linked to entities
-- **relations**: Stores relationships between entities (with unique
-  constraint to prevent duplicates)
-
-All queries use optimized SQLite indexes for fast text search and
-relationship traversal.
+- **relations**: Stores relationships between entities
+- **schema_version**: Tracks applied migrations
+- **entities_fts**: FTS5 virtual table for full-text search (with
+  sync triggers)
 
 ## Development
 
@@ -271,21 +312,7 @@ pnpm run build
 
 # Run in development mode
 pnpm run dev
-
-# Run tests
-pnpm test
 ```
-
-## How It Works
-
-Under the hood, this uses:
-
-- **SQLite** for fast, reliable local storage
-- **better-sqlite3** for Node.js integration
-- **Optimized text search** with relevance ranking and fuzzy matching
-
-Your data is stored in a single `.db` file on your computer - no
-cloud, no external services, completely private.
 
 ## License
 
@@ -298,3 +325,5 @@ Built with:
 - [better-sqlite3](https://github.com/WiseLibs/better-sqlite3) - Fast
   SQLite driver
 - [tmcp](https://github.com/tmcp-io/tmcp) - MCP server framework
+
+Originally by [Scott Spence](https://github.com/spences10/mcp-memory-sqlite).

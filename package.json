@@ -16,12 +16,12 @@
 	],
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/spences10/mcp-memory-sqlite"
+		"url": "https://github.com/alexfayers/mcp-memory-sqlite"
 	},
 	"bugs": {
-		"url": "https://github.com/spences10/mcp-memory-sqlite/issues"
+		"url": "https://github.com/alexfayers/mcp-memory-sqlite/issues"
 	},
-	"homepage": "https://github.com/spences10/mcp-memory-sqlite#readme",
+	"homepage": "https://github.com/alexfayers/mcp-memory-sqlite#readme",
 	"keywords": [
 		"mcp",
 		"memory",
@@ -38,10 +38,7 @@
 		"format": "prettier --write .",
 		"format:check": "prettier --check .",
 		"migrate": "node --loader ts-node/esm src/db/migrations/run.ts",
-		"prepare": "pnpm run build",
-		"changeset": "changeset",
-		"version": "changeset version",
-		"release": "pnpm run build && changeset publish"
+		"prepare": "pnpm run build"
 	},
 	"dependencies": {
 		"@tmcp/adapter-valibot": "^0.1.5",
@@ -52,13 +49,9 @@
 		"valibot": "^1.2.0"
 	},
 	"devDependencies": {
-		"@changesets/cli": "^2.29.8",
 		"@types/better-sqlite3": "^7.6.13",
 		"prettier": "^3.7.3",
 		"ts-node": "^10.9.2",
 		"typescript": "^5.9.3"
-	},
-	"volta": {
-		"node": "24.14.0"
 	}
 }
