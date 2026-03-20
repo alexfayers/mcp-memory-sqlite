@@ -1,4 +1,6 @@
 import Database from 'better-sqlite3';
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { run_migrations } from './migrations/run.js';
 import { Entity, Relation, SearchResult } from '../types/index.js';
 
@@ -16,8 +18,8 @@ export class DatabaseManager {
 			throw new Error('Database path is required');
 		}
 
-		// Open database connection
-		this.db = new Database(config.dbPath);
+    mkdirSync(dirname(config.dbPath), { recursive: true });
+    this.db = new Database(config.dbPath);
 
 		// Configure database for better performance and safety
 		this.db.pragma('journal_mode = WAL');
