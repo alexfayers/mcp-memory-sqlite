@@ -1,5 +1,5 @@
 {
-	"name": "mcp-memory-sqlite",
+	"name": "alexfayers-mcp-memory-sqlite",
 	"version": "0.0.4",
 	"description": "SQLite-based persistent memory tool for MCP with text search",
 	"license": "MIT",
@@ -7,7 +7,7 @@
 	"main": "dist/index.js",
 	"types": "dist/index.d.ts",
 	"bin": {
-		"mcp-memory-sqlite": "./dist/index.js"
+		"alexfayers-mcp-memory-sqlite": "./dist/index.js"
 	},
 	"files": [
 		"dist",
