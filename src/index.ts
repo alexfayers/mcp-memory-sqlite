@@ -546,7 +546,7 @@ async function main() {
 
 	const transport = new StdioTransport(server);
 	transport.listen();
-	console.error('SQLite Memory MCP server running on stdio');
+	console.error(`SQLite Memory MCP server running on stdio (${config.dbPath})`);
 }
 
 main().catch(console.error);
