@@ -254,8 +254,14 @@ export class DatabaseManager {
 	async search_entities(
 		query: string,
 		limit: number = 10,
+		entityType?: string,
 	): Promise<Entity[]> {
 		const effective_limit = Math.min(Math.max(1, limit), 50);
+		const type_filter = entityType ? ' AND e.entity_type = ?' : '';
+
+		const params: unknown[] = [this.sanitize_fts_query(query)];
+		if (entityType) params.push(entityType);
+		params.push(effective_limit);
 
 		const results = this.db
 			.prepare(
@@ -263,12 +269,12 @@ export class DatabaseManager {
         SELECT e.name, e.entity_type, e.created_at
         FROM entities_fts
         JOIN entities e ON entities_fts.name = e.name
-        WHERE entities_fts MATCH ?
+        WHERE entities_fts MATCH ?${type_filter}
         ORDER BY bm25(entities_fts)
         LIMIT ?
       `,
 			)
-			.all(this.sanitize_fts_query(query), effective_limit) as Array<{
+			.all(...params) as Array<{
 			name: string;
 			entity_type: string;
 		}>;
@@ -525,9 +531,9 @@ export class DatabaseManager {
 	async search_nodes(
 		query: string,
 		limit: number = 10,
+		entityType?: string,
 	): Promise<{ entities: Entity[]; relations: Relation[] }> {
 		try {
-			// Validate text query
 			if (typeof query !== 'string') {
 				throw new Error('Text query must be a string');
 			}
@@ -535,8 +541,7 @@ export class DatabaseManager {
 				throw new Error('Text query cannot be empty');
 			}
 
-			// Text-based search
-			const entities = await this.search_entities(query, limit);
+			const entities = await this.search_entities(query, limit, entityType);
 
 			// If no entities found, return empty result
 			if (entities.length === 0) {

@@ -33,6 +33,7 @@ const CreateEntitiesSchema = v.object({
 const SearchNodesSchema = v.object({
 	query: v.string(),
 	limit: v.optional(v.number()),
+	entityType: v.optional(v.string()),
 });
 
 const CreateRelationsSchema = v.object({
@@ -123,12 +124,12 @@ function setupTools(server: McpServer<any>, db: DatabaseManager) {
 		{
 			name: 'search_nodes',
 			description:
-				'Search entities and relations by text query. Returns up to limit results (default 10, max 50) ordered by relevance. Uses FTS5 full-text search with BM25 ranking - supports multi-word queries where terms match independently across name, entity_type, and observations fields.',
+				'Search entities and relations by text query. Returns up to limit results (default 10, max 50) ordered by relevance. Uses FTS5 full-text search with BM25 ranking - supports multi-word queries where terms match independently across name, entity_type, and observations fields. Optionally filter results to a specific entityType (e.g. "task").',
 			schema: SearchNodesSchema,
 		},
-		async ({ query, limit }) => {
+		async ({ query, limit, entityType }) => {
 			try {
-				const result = await db.search_nodes(query, limit);
+				const result = await db.search_nodes(query, limit, entityType);
 				return {
 					content: [
 						{
@@ -211,7 +212,6 @@ function setupTools(server: McpServer<any>, db: DatabaseManager) {
 		},
 		async ({ relations }) => {
 			try {
-				// Convert to internal Relation type
 				const internalRelations: Relation[] = relations.map((r) => ({
 					from: r.source,
 					to: r.target,
@@ -514,11 +514,9 @@ function setupTools(server: McpServer<any>, db: DatabaseManager) {
 
 // Start the server
 async function main() {
-	// Initialize database
 	const config = get_database_config();
 	const db = await DatabaseManager.get_instance(config);
 
-	// Create tmcp server with Valibot adapter
 	const adapter = new ValibotJsonSchemaAdapter();
 	const server = new McpServer<any>(
 		{
@@ -535,10 +533,8 @@ async function main() {
 		},
 	);
 
-	// Setup tool handlers
 	setupTools(server, db);
 
-	// Error handling and graceful shutdown
 	process.on('SIGINT', async () => {
 		await db?.close();
 		process.exit(0);
