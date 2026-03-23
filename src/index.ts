@@ -20,12 +20,23 @@ const package_json = JSON.parse(
 const { name, version } = package_json;
 
 // Define schemas
+const RELATION_EXEMPT_TYPES = new Set(['user-preferences', 'pattern']);
+
 const CreateEntitiesSchema = v.object({
 	entities: v.array(
 		v.object({
 			name: v.string(),
 			entityType: v.string(),
 			observations: v.array(v.string()),
+			relations: v.optional(
+				v.array(
+					v.object({
+						source: v.string(),
+						target: v.string(),
+						type: v.string(),
+					}),
+				),
+			),
 		}),
 	),
 });
@@ -81,12 +92,30 @@ function setupTools(server: McpServer<any>, db: DatabaseManager) {
 	server.tool<typeof CreateEntitiesSchema>(
 		{
 			name: 'create_entities',
-			description: 'Create or update entities with observations',
+			description: 'Create or update entities with observations. For entity types that require relations (anything except "user-preferences" and "pattern"), you MUST supply at least one relation per entity via the entity\'s inline relations field (array of {source, target, type} objects).',
 			schema: CreateEntitiesSchema,
 		},
 		async ({ entities }) => {
 			try {
+				for (const entity of entities) {
+					if (
+						!RELATION_EXEMPT_TYPES.has(entity.entityType) &&
+						(!entity.relations || entity.relations.length === 0)
+					) {
+						throw new Error(
+							`Entity "${entity.name}" of type "${entity.entityType}" requires at least one relation. ` +
+							`Only "user-preferences" and "pattern" entities are exempt. ` +
+							`Provide relations in the entity's "relations" field.`,
+						);
+					}
+				}
+				const allRelations: Relation[] = entities
+					.flatMap((e) => e.relations ?? [])
+					.map((r) => ({ from: r.source, to: r.target, relationType: r.type }));
 				await db.create_entities(entities);
+				if (allRelations.length > 0) {
+					await db.create_relations(allRelations);
+				}
 				return {
 					content: [
 						{
