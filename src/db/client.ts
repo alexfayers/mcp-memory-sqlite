@@ -4,7 +4,6 @@ import { dirname } from 'node:path';
 import { run_migrations } from './migrations/run.js';
 import { Entity, Relation, SearchResult } from '../types/index.js';
 
-// Types for configuration
 interface DatabaseConfig {
 	dbPath: string;
 }
@@ -18,10 +17,9 @@ export class DatabaseManager {
 			throw new Error('Database path is required');
 		}
 
-    mkdirSync(dirname(config.dbPath), { recursive: true });
-    this.db = new Database(config.dbPath);
+		mkdirSync(dirname(config.dbPath), { recursive: true });
+		this.db = new Database(config.dbPath);
 
-		// Configure database for better performance and safety
 		this.db.pragma('journal_mode = WAL');
 		this.db.pragma('synchronous = NORMAL');
 		this.db.pragma('cache_size = 1000');
@@ -39,8 +37,8 @@ export class DatabaseManager {
 		return DatabaseManager.instance;
 	}
 
-	// Entity operations
 	async create_entities(
+		project: string,
 		entities: Array<{
 			name: string;
 			entityType: string;
@@ -49,7 +47,6 @@ export class DatabaseManager {
 	): Promise<void> {
 		const transaction = this.db.transaction(() => {
 			for (const entity of entities) {
-				// Validate entity name
 				if (
 					!entity.name ||
 					typeof entity.name !== 'string' ||
@@ -58,7 +55,6 @@ export class DatabaseManager {
 					throw new Error('Entity name must be a non-empty string');
 				}
 
-				// Validate entity type
 				if (
 					!entity.entityType ||
 					typeof entity.entityType !== 'string' ||
@@ -69,7 +65,6 @@ export class DatabaseManager {
 					);
 				}
 
-				// Validate observations
 				if (
 					!Array.isArray(entity.observations) ||
 					entity.observations.length === 0
@@ -89,33 +84,28 @@ export class DatabaseManager {
 					);
 				}
 
-				// Check if entity exists
 				const existing = this.db
-					.prepare('SELECT name FROM entities WHERE name = ?')
-					.get(entity.name);
+					.prepare('SELECT name FROM entities WHERE name = ? AND project = ?')
+					.get(entity.name, project);
 
 				if (existing) {
-					// Update existing entity
 					this.db
 						.prepare(
-							'UPDATE entities SET entity_type = ? WHERE name = ?',
+							'UPDATE entities SET entity_type = ? WHERE name = ? AND project = ?',
 						)
-						.run(entity.entityType, entity.name);
+						.run(entity.entityType, entity.name, project);
 				} else {
-					// Insert new entity
 					this.db
 						.prepare(
-							'INSERT INTO entities (name, entity_type) VALUES (?, ?)',
+							'INSERT INTO entities (name, entity_type, project) VALUES (?, ?, ?)',
 						)
-						.run(entity.name, entity.entityType);
+						.run(entity.name, entity.entityType, project);
 				}
 
-				// Clear old observations
 				this.db
-					.prepare('DELETE FROM observations WHERE entity_name = ?')
-					.run(entity.name);
+					.prepare('DELETE FROM observations WHERE entity_name = ? AND (SELECT project FROM entities WHERE name = ?) = ?')
+					.run(entity.name, entity.name, project);
 
-				// Add new observations
 				const insert_obs = this.db.prepare(
 					'INSERT INTO observations (entity_name, content) VALUES (?, ?)',
 				);
@@ -128,7 +118,6 @@ export class DatabaseManager {
 		try {
 			transaction();
 		} catch (error) {
-			// Wrap all errors with context
 			throw new Error(
 				`Entity operation failed: ${
 					error instanceof Error ? error.message : String(error)
@@ -138,13 +127,14 @@ export class DatabaseManager {
 	}
 
 	async add_observations(
+		project: string,
 		entityName: string,
 		observations: string[],
 	): Promise<number> {
 		try {
 			const existing = this.db
-				.prepare('SELECT name FROM entities WHERE name = ?')
-				.get(entityName);
+				.prepare('SELECT name FROM entities WHERE name = ? AND project = ?')
+				.get(entityName, project);
 
 			if (!existing) {
 				throw new Error(`Entity not found: ${entityName}`);
@@ -184,13 +174,14 @@ export class DatabaseManager {
 	}
 
 	async delete_observations(
+		project: string,
 		entityName: string,
 		observations: string[],
 	): Promise<number> {
 		try {
 			const existing = this.db
-				.prepare('SELECT name FROM entities WHERE name = ?')
-				.get(entityName);
+				.prepare('SELECT name FROM entities WHERE name = ? AND project = ?')
+				.get(entityName, project);
 
 			if (!existing) {
 				throw new Error(`Entity not found: ${entityName}`);
@@ -219,12 +210,12 @@ export class DatabaseManager {
 		}
 	}
 
-	async get_entity(name: string): Promise<Entity> {
+	async get_entity(project: string, name: string): Promise<Entity> {
 		const entity_result = this.db
 			.prepare(
-				'SELECT name, entity_type FROM entities WHERE name = ?',
+				'SELECT name, entity_type FROM entities WHERE name = ? AND project = ?',
 			)
-			.get(name) as { name: string; entity_type: string } | undefined;
+			.get(name, project) as { name: string; entity_type: string } | undefined;
 
 		if (!entity_result) {
 			throw new Error(`Entity not found: ${name}`);
@@ -252,6 +243,7 @@ export class DatabaseManager {
 	}
 
 	async search_entities(
+		project: string,
 		query: string,
 		limit: number = 10,
 		entityType?: string,
@@ -259,17 +251,17 @@ export class DatabaseManager {
 		const effective_limit = Math.min(Math.max(1, limit), 50);
 		const type_filter = entityType ? ' AND e.entity_type = ?' : '';
 
-		const params: unknown[] = [this.sanitize_fts_query(query)];
+		const params: unknown[] = [this.sanitize_fts_query(query), project];
 		if (entityType) params.push(entityType);
 		params.push(effective_limit);
 
 		const results = this.db
 			.prepare(
 				`
-        SELECT e.name, e.entity_type, e.created_at
+        SELECT e.name, e.entity_type
         FROM entities_fts
         JOIN entities e ON entities_fts.name = e.name
-        WHERE entities_fts MATCH ?${type_filter}
+        WHERE entities_fts MATCH ? AND e.project = ?${type_filter}
         ORDER BY bm25(entities_fts)
         LIMIT ?
       `,
@@ -281,15 +273,14 @@ export class DatabaseManager {
 
 		const entities: Entity[] = [];
 		for (const row of results) {
-			const name = row.name;
 			const observations = this.db
 				.prepare(
 					'SELECT content FROM observations WHERE entity_name = ?',
 				)
-				.all(name) as Array<{ content: string }>;
+				.all(row.name) as Array<{ content: string }>;
 
 			entities.push({
-				name,
+				name: row.name,
 				entityType: row.entity_type,
 				observations: observations.map((obs) => obs.content),
 			});
@@ -298,24 +289,23 @@ export class DatabaseManager {
 		return entities;
 	}
 
-	async get_recent_entities(limit = 10): Promise<Entity[]> {
+	async get_recent_entities(project: string, limit = 10): Promise<Entity[]> {
 		const results = this.db
 			.prepare(
-				'SELECT name, entity_type FROM entities ORDER BY created_at DESC LIMIT ?',
+				'SELECT name, entity_type FROM entities WHERE project = ? ORDER BY created_at DESC LIMIT ?',
 			)
-			.all(limit) as Array<{ name: string; entity_type: string }>;
+			.all(project, limit) as Array<{ name: string; entity_type: string }>;
 
 		const entities: Entity[] = [];
 		for (const row of results) {
-			const name = row.name;
 			const observations = this.db
 				.prepare(
 					'SELECT content FROM observations WHERE entity_name = ?',
 				)
-				.all(name) as Array<{ content: string }>;
+				.all(row.name) as Array<{ content: string }>;
 
 			entities.push({
-				name,
+				name: row.name,
 				entityType: row.entity_type,
 				observations: observations.map((obs) => obs.content),
 			});
@@ -324,13 +314,11 @@ export class DatabaseManager {
 		return entities;
 	}
 
-	// Relation operations
-	async create_relations(relations: Relation[]): Promise<void> {
+	async create_relations(project: string, relations: Relation[]): Promise<void> {
 		try {
 			if (relations.length === 0) return;
 
 			const transaction = this.db.transaction(() => {
-				// Use INSERT OR IGNORE to silently skip duplicate relations
 				const insert = this.db.prepare(
 					'INSERT OR IGNORE INTO relations (source, target, relation_type) VALUES (?, ?, ?)',
 				);
@@ -353,34 +341,30 @@ export class DatabaseManager {
 		}
 	}
 
-	async delete_entity(name: string): Promise<void> {
+	async delete_entity(project: string, name: string): Promise<void> {
 		try {
-			// Check if entity exists first
 			const existing = this.db
-				.prepare('SELECT name FROM entities WHERE name = ?')
-				.get(name);
+				.prepare('SELECT name FROM entities WHERE name = ? AND project = ?')
+				.get(name, project);
 
 			if (!existing) {
 				throw new Error(`Entity not found: ${name}`);
 			}
 
 			const transaction = this.db.transaction(() => {
-				// Delete associated observations first (due to foreign key)
 				this.db
 					.prepare('DELETE FROM observations WHERE entity_name = ?')
 					.run(name);
 
-				// Delete associated relations (due to foreign key)
 				this.db
 					.prepare(
 						'DELETE FROM relations WHERE source = ? OR target = ?',
 					)
 					.run(name, name);
 
-				// Delete the entity
 				this.db
-					.prepare('DELETE FROM entities WHERE name = ?')
-					.run(name);
+					.prepare('DELETE FROM entities WHERE name = ? AND project = ?')
+					.run(name, project);
 			});
 
 			transaction();
@@ -394,6 +378,7 @@ export class DatabaseManager {
 	}
 
 	async delete_relation(
+		project: string,
 		source: string,
 		target: string,
 		type: string,
@@ -420,6 +405,7 @@ export class DatabaseManager {
 	}
 
 	async get_relations_for_entities(
+		project: string,
 		entities: Entity[],
 	): Promise<Relation[]> {
 		if (entities.length === 0) return [];
@@ -450,29 +436,24 @@ export class DatabaseManager {
 	}
 
 	async get_entity_with_relations(
+		project: string,
 		name: string,
 	): Promise<{ entity: Entity; relations: Relation[]; relatedEntities: Entity[] }> {
-		// Get the main entity
-		const entity = await this.get_entity(name);
+		const entity = await this.get_entity(project, name);
+		const relations = await this.get_relations_for_entities(project, [entity]);
 
-		// Get all relations where this entity is source or target
-		const relations = await this.get_relations_for_entities([entity]);
-
-		// Get all related entity names
 		const related_names = new Set<string>();
 		for (const rel of relations) {
 			if (rel.from !== name) related_names.add(rel.from);
 			if (rel.to !== name) related_names.add(rel.to);
 		}
 
-		// Fetch all related entities
 		const relatedEntities: Entity[] = [];
 		for (const related_name of related_names) {
 			try {
-				const related_entity = await this.get_entity(related_name);
+				const related_entity = await this.get_entity(project, related_name);
 				relatedEntities.push(related_entity);
 			} catch (error) {
-				// Skip entities that no longer exist
 				console.warn(
 					`Related entity "${related_name}" not found: ${
 						error instanceof Error ? error.message : String(error)
@@ -485,12 +466,13 @@ export class DatabaseManager {
 	}
 
 	async search_related_nodes(
+		project: string,
 		name: string,
 		entityType?: string,
 		relationType?: string,
 	): Promise<{ entity: Entity; relations: Relation[]; relatedEntities: Entity[] }> {
-		const entity = await this.get_entity(name);
-		let relations = await this.get_relations_for_entities([entity]);
+		const entity = await this.get_entity(project, name);
+		let relations = await this.get_relations_for_entities(project, [entity]);
 
 		if (relationType) {
 			relations = relations.filter((r) => r.relationType === relationType);
@@ -505,7 +487,7 @@ export class DatabaseManager {
 		const relatedEntities: Entity[] = [];
 		for (const related_name of related_names) {
 			try {
-				const related_entity = await this.get_entity(related_name);
+				const related_entity = await this.get_entity(project, related_name);
 				if (!entityType || related_entity.entityType === entityType) {
 					relatedEntities.push(related_entity);
 				}
@@ -517,18 +499,17 @@ export class DatabaseManager {
 		return { entity, relations, relatedEntities };
 	}
 
-	// Graph operations
-	async read_graph(): Promise<{
+	async read_graph(project: string): Promise<{
 		entities: Entity[];
 		relations: Relation[];
 	}> {
-		const recent_entities = await this.get_recent_entities();
-		const relations =
-			await this.get_relations_for_entities(recent_entities);
+		const recent_entities = await this.get_recent_entities(project);
+		const relations = await this.get_relations_for_entities(project, recent_entities);
 		return { entities: recent_entities, relations };
 	}
 
 	async search_nodes(
+		project: string,
 		query: string,
 		limit: number = 10,
 		entityType?: string,
@@ -541,15 +522,13 @@ export class DatabaseManager {
 				throw new Error('Text query cannot be empty');
 			}
 
-			const entities = await this.search_entities(query, limit, entityType);
+			const entities = await this.search_entities(project, query, limit, entityType);
 
-			// If no entities found, return empty result
 			if (entities.length === 0) {
 				return { entities: [], relations: [] };
 			}
 
-			const relations =
-				await this.get_relations_for_entities(entities);
+			const relations = await this.get_relations_for_entities(project, entities);
 			return { entities, relations };
 		} catch (error) {
 			throw new Error(
@@ -560,7 +539,6 @@ export class DatabaseManager {
 		}
 	}
 
-	// Database operations
 	public get_client() {
 		return this.db;
 	}

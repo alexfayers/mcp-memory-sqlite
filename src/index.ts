@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { ValibotJsonSchemaAdapter } from '@tmcp/adapter-valibot';
-import { StdioTransport } from '@tmcp/transport-stdio';
+import { HttpTransport } from '@tmcp/transport-http';
+import { createServer } from 'node:http';
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { McpServer } from 'tmcp';
@@ -11,7 +12,6 @@ import { DatabaseManager } from './db/client.js';
 import { get_database_config } from './db/config.js';
 import { Relation } from './types/index.js';
 
-// Get version from package.json
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const package_json = JSON.parse(
@@ -19,10 +19,19 @@ const package_json = JSON.parse(
 );
 const { name, version } = package_json;
 
-// Define schemas
 const RELATION_EXEMPT_TYPES = new Set(['user-preferences', 'pattern']);
 
+const ENTITY_NAMING_GUIDE = `
+Entity naming conventions (prefix with entity type to avoid collisions):
+- project/<repo-name> (e.g. project/MyRepo)
+- feature/<project>/<area> (e.g. feature/MyRepo/auth)
+- task/<TICKET-ID>-<slug> (e.g. task/ABC-123-fix-login)
+- user-preferences/<alias>-<topic> (e.g. user-preferences/alice-workflow)
+- pattern/<short-noun> (e.g. pattern/retry-logic)
+- changelog/<TICKET-ID>-<slug> or changelog/<project>-<date>-<slug>`.trim();
+
 const CreateEntitiesSchema = v.object({
+	project: v.string(),
 	entities: v.array(
 		v.object({
 			name: v.string(),
@@ -42,12 +51,18 @@ const CreateEntitiesSchema = v.object({
 });
 
 const SearchNodesSchema = v.object({
+	project: v.string(),
 	query: v.string(),
 	limit: v.optional(v.number()),
 	entityType: v.optional(v.string()),
 });
 
+const ReadGraphSchema = v.object({
+	project: v.string(),
+});
+
 const CreateRelationsSchema = v.object({
+	project: v.string(),
 	relations: v.array(
 		v.object({
 			source: v.string(),
@@ -58,44 +73,85 @@ const CreateRelationsSchema = v.object({
 });
 
 const DeleteEntitySchema = v.object({
+	project: v.string(),
 	name: v.string(),
 });
 
 const DeleteRelationSchema = v.object({
+	project: v.string(),
 	source: v.string(),
 	target: v.string(),
 	type: v.string(),
 });
 
 const GetEntityWithRelationsSchema = v.object({
+	project: v.string(),
 	name: v.string(),
 });
 
 const AddObservationsSchema = v.object({
+	project: v.string(),
 	entityName: v.string(),
 	observations: v.array(v.string()),
 });
 
 const DeleteObservationsSchema = v.object({
+	project: v.string(),
 	entityName: v.string(),
 	observations: v.array(v.string()),
 });
 
 const SearchRelatedNodesSchema = v.object({
+	project: v.string(),
 	name: v.string(),
 	entityType: v.optional(v.string()),
 	relationType: v.optional(v.string()),
 });
 
+function make_error_response(error: unknown) {
+	return {
+		content: [
+			{
+				type: 'text' as const,
+				text: JSON.stringify(
+					{
+						error: 'internal_error',
+						message: error instanceof Error ? error.message : 'Unknown error',
+					},
+					null,
+					2,
+				),
+			},
+		],
+		isError: true,
+	};
+}
+
 function setupTools(server: McpServer<any>, db: DatabaseManager) {
-	// Tool: Create Entities
 	server.tool<typeof CreateEntitiesSchema>(
 		{
 			name: 'create_entities',
-			description: 'Create or update entities with observations. For entity types that require relations (anything except "user-preferences" and "pattern"), you MUST supply at least one relation per entity via the entity\'s inline relations field (array of {source, target, type} objects).',
+			description: `Create or update entities with observations in the knowledge graph. All data is scoped to the given project string.
+
+RELATION REQUIREMENT: For entity types that require relations (anything except "user-preferences" and "pattern"), you MUST supply at least one relation per entity via the entity's inline relations field (array of {source, target, type} objects). This is enforced server-side.
+
+OBSERVATION RULES:
+- project/feature entities: use present tense for current facts
+- task/changelog entities: use past tense for completed actions
+- Each observation must be atomic - one fact per observation
+- create_entities OVERWRITES all existing observations - use add_observations to append safely
+
+${ENTITY_NAMING_GUIDE}
+
+TASK ENTITY DISCIPLINE:
+- Every task/ entity MUST include a STATUS: observation: "STATUS: in-progress", "STATUS: blocked", or "STATUS: complete"
+- Task entities MUST be linked to their parent project with a belongs-to relation
+- CRITICAL: Always call create_relations after create_entities - relations are the core of the graph
+
+RELATION TYPES: task implements feature, task belongs-to project, feature belongs-to project, pattern used-in project, changelog modified project, changelog follows changelog`,
 			schema: CreateEntitiesSchema,
 		},
-		async ({ entities }) => {
+		async ({ project, entities }) => {
 			try {
 				for (const entity of entities) {
 					if (
@@ -104,17 +160,17 @@ function setupTools(server: McpServer<any>, db: DatabaseManager) {
 					) {
 						throw new Error(
 							`Entity "${entity.name}" of type "${entity.entityType}" requires at least one relation. ` +
-							`Only "user-preferences" and "pattern" entities are exempt. ` +
-							`Provide relations in the entity's "relations" field.`,
+								`Only "user-preferences" and "pattern" entities are exempt. ` +
+								`Provide relations in the entity's "relations" field.`,
 						);
 					}
 				}
 				const allRelations: Relation[] = entities
 					.flatMap((e) => e.relations ?? [])
 					.map((r) => ({ from: r.source, to: r.target, relationType: r.type }));
-				await db.create_entities(entities);
+				await db.create_entities(project, entities);
 				if (allRelations.length > 0) {
-					await db.create_relations(allRelations);
+					await db.create_relations(project, allRelations);
 				}
 				return {
 					content: [
@@ -125,170 +181,98 @@ function setupTools(server: McpServer<any>, db: DatabaseManager) {
 					],
 				};
 			} catch (error) {
-				return {
-					content: [
-						{
-							type: 'text' as const,
-							text: JSON.stringify(
-								{
-									error: 'internal_error',
-									message:
-										error instanceof Error
-											? error.message
-											: 'Unknown error',
-								},
-								null,
-								2,
-							),
-						},
-					],
-					isError: true,
-				};
+				return make_error_response(error);
 			}
 		},
 	);
 
-	// Tool: Search Nodes
 	server.tool<typeof SearchNodesSchema>(
 		{
 			name: 'search_nodes',
-			description:
-				'Search entities and relations by text query. Returns up to limit results (default 10, max 50) ordered by relevance. Uses FTS5 full-text search with BM25 ranking - supports multi-word queries where terms match independently across name, entity_type, and observations fields. Optionally filter results to a specific entityType (e.g. "task").',
+			description: `Search entities and relations by text query within the given project. Returns up to limit results (default 10, max 50) ordered by relevance. Uses FTS5 full-text search with BM25 ranking - supports multi-word queries where terms match independently across name, entity_type, and observations fields. Optionally filter results to a specific entityType (e.g. "task").
+
+USAGE GUIDANCE:
+- Search for keywords from the user's message (e.g. file names, feature names, ticket IDs)
+- Always search for "user-preferences" to find workflow and coding style rules
+- Always search for "STATUS in-progress" to find any unfinished task entities
+- Search for relevant pattern/ entities related to tools/services being used
+- Multi-word queries match terms independently (OR semantics with BM25 ranking)`,
 			schema: SearchNodesSchema,
 		},
-		async ({ query, limit, entityType }) => {
+		async ({ project, query, limit, entityType }) => {
 			try {
-				const result = await db.search_nodes(query, limit, entityType);
+				const result = await db.search_nodes(project, query, limit, entityType);
 				return {
-					content: [
-						{
-							type: 'text' as const,
-							text: JSON.stringify(result, null, 2),
-						},
-					],
+					content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
 				};
 			} catch (error) {
-				return {
-					content: [
-						{
-							type: 'text' as const,
-							text: JSON.stringify(
-								{
-									error: 'internal_error',
-									message:
-										error instanceof Error
-											? error.message
-											: 'Unknown error',
-								},
-								null,
-								2,
-							),
-						},
-					],
-					isError: true,
-				};
+				return make_error_response(error);
 			}
 		},
 	);
 
-	// Tool: Read Graph
-	server.tool(
+	server.tool<typeof ReadGraphSchema>(
 		{
 			name: 'read_graph',
-			description: 'Get recent entities and their relations',
+			description: `Get the most recent entities and their relations for the given project. Returns up to 10 recent entities. Use this as a starting point to discover what is already known - call this first before any task, then use search_nodes and get_entity_with_relations for deeper context.`,
+			schema: ReadGraphSchema,
 		},
-		async () => {
+		async ({ project }) => {
 			try {
-				const result = await db.read_graph();
+				const result = await db.read_graph(project);
 				return {
-					content: [
-						{
-							type: 'text' as const,
-							text: JSON.stringify(result, null, 2),
-						},
-					],
+					content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
 				};
 			} catch (error) {
-				return {
-					content: [
-						{
-							type: 'text' as const,
-							text: JSON.stringify(
-								{
-									error: 'internal_error',
-									message:
-										error instanceof Error
-											? error.message
-											: 'Unknown error',
-								},
-								null,
-								2,
-							),
-						},
-					],
-					isError: true,
-				};
+				return make_error_response(error);
 			}
 		},
 	);
 
-	// Tool: Create Relations
 	server.tool<typeof CreateRelationsSchema>(
 		{
 			name: 'create_relations',
-			description: 'Create relations between entities',
+			description: `Create relations between entities in the given project. Relations are the core of the graph model - entities without relations are nearly useless.
+
+CRITICAL: You MUST call create_relations whenever you call create_entities. Always link new entities to existing ones.
+
+Every entity MUST have at least one relation, except user-preferences and pattern entities (global singletons not tied to a specific project).
+
+STANDARD RELATION TYPES:
+- task implements feature
+- task belongs-to project
+- feature belongs-to project
+- pattern used-in project
+- changelog modified project or feature
+- changelog follows <previous changelog> (chain chronological changes for full history traversal)`,
 			schema: CreateRelationsSchema,
 		},
-		async ({ relations }) => {
+		async ({ project, relations }) => {
 			try {
 				const internalRelations: Relation[] = relations.map((r) => ({
 					from: r.source,
 					to: r.target,
 					relationType: r.type,
 				}));
-				await db.create_relations(internalRelations);
+				await db.create_relations(project, internalRelations);
 				return {
-					content: [
-						{
-							type: 'text' as const,
-							text: `Created ${relations.length} relations`,
-						},
-					],
+					content: [{ type: 'text' as const, text: `Created ${relations.length} relations` }],
 				};
 			} catch (error) {
-				return {
-					content: [
-						{
-							type: 'text' as const,
-							text: JSON.stringify(
-								{
-									error: 'internal_error',
-									message:
-										error instanceof Error
-											? error.message
-											: 'Unknown error',
-								},
-								null,
-								2,
-							),
-						},
-					],
-					isError: true,
-				};
+				return make_error_response(error);
 			}
 		},
 	);
 
-	// Tool: Delete Entity
 	server.tool<typeof DeleteEntitySchema>(
 		{
 			name: 'delete_entity',
-			description: 'Delete entity and associated data',
+			description: `Delete an entity and all its associated observations and relations from the given project. Use sparingly - prefer marking things deprecated in observations unless the memory would actively mislead future sessions.`,
 			schema: DeleteEntitySchema,
 		},
-		async ({ name }) => {
+		async ({ project, name }) => {
 			try {
-				await db.delete_entity(name);
+				await db.delete_entity(project, name);
 				return {
 					content: [
 						{
@@ -298,39 +282,20 @@ function setupTools(server: McpServer<any>, db: DatabaseManager) {
 					],
 				};
 			} catch (error) {
-				return {
-					content: [
-						{
-							type: 'text' as const,
-							text: JSON.stringify(
-								{
-									error: 'internal_error',
-									message:
-										error instanceof Error
-											? error.message
-											: 'Unknown error',
-								},
-								null,
-								2,
-							),
-						},
-					],
-					isError: true,
-				};
+				return make_error_response(error);
 			}
 		},
 	);
 
-	// Tool: Delete Relation
 	server.tool<typeof DeleteRelationSchema>(
 		{
 			name: 'delete_relation',
-			description: 'Delete relation between entities',
+			description: `Delete a specific relation between two entities in the given project. Use sparingly - only remove relations that are incorrect or no longer relevant.`,
 			schema: DeleteRelationSchema,
 		},
-		async ({ source, target, type }) => {
+		async ({ project, source, target, type }) => {
 			try {
-				await db.delete_relation(source, target, type);
+				await db.delete_relation(project, source, target, type);
 				return {
 					content: [
 						{
@@ -340,83 +305,49 @@ function setupTools(server: McpServer<any>, db: DatabaseManager) {
 					],
 				};
 			} catch (error) {
-				return {
-					content: [
-						{
-							type: 'text' as const,
-							text: JSON.stringify(
-								{
-									error: 'internal_error',
-									message:
-										error instanceof Error
-											? error.message
-											: 'Unknown error',
-								},
-								null,
-								2,
-							),
-						},
-					],
-					isError: true,
-				};
+				return make_error_response(error);
 			}
 		},
 	);
 
-	// Tool: Get Entity With Relations
 	server.tool<typeof GetEntityWithRelationsSchema>(
 		{
 			name: 'get_entity_with_relations',
-			description:
-				'Get an entity along with all its relations and related entities. Useful for exploring the knowledge graph around a specific entity.',
+			description: `Get an entity along with all its relations and related entities within the given project. Useful for exploring the knowledge graph around a specific entity - traverses the graph to discover linked context that search alone would miss.
+
+USAGE: Call this on every relevant entity found via search_nodes or read_graph. This is how you discover connected context that plain search misses. Also use search_related_nodes(name="project/<current-project>", entityType="task") to find all task entities for a project.`,
 			schema: GetEntityWithRelationsSchema,
 		},
-		async ({ name }) => {
+		async ({ project, name }) => {
 			try {
-				const result = await db.get_entity_with_relations(name);
+				const result = await db.get_entity_with_relations(project, name);
 				return {
-					content: [
-						{
-							type: 'text' as const,
-							text: JSON.stringify(result, null, 2),
-						},
-					],
+					content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
 				};
 			} catch (error) {
-				return {
-					content: [
-						{
-							type: 'text' as const,
-							text: JSON.stringify(
-								{
-									error: 'internal_error',
-									message:
-										error instanceof Error
-											? error.message
-											: 'Unknown error',
-								},
-								null,
-								2,
-							),
-						},
-					],
-					isError: true,
-				};
+				return make_error_response(error);
 			}
 		},
 	);
 
-	// Tool: Add Observations
 	server.tool<typeof AddObservationsSchema>(
 		{
 			name: 'add_observations',
-			description:
-				'Append observations to an existing entity without overwriting existing ones. Skips duplicate observations. Throws if the entity does not exist.',
+			description: `Append observations to an existing entity without overwriting existing ones. Skips duplicate observations. Throws if the entity does not exist.
+
+PREFER THIS OVER create_entities when you only want to add new facts. create_entities OVERWRITES all observations; add_observations safely appends.
+
+OBSERVATION BEST PRACTICES:
+- Each observation must be atomic - one fact per observation
+- project/feature entities: use present tense for current facts
+- task/changelog entities: use past tense for completed actions
+- Do not include rationale in the same observation as the fact - add a separate observation for "why"
+- Prefer small, precise observations over long narrative text`,
 			schema: AddObservationsSchema,
 		},
-		async ({ entityName, observations }) => {
+		async ({ project, entityName, observations }) => {
 			try {
-				const added = await db.add_observations(entityName, observations);
+				const added = await db.add_observations(project, entityName, observations);
 				const skipped = observations.length - added;
 				return {
 					content: [
@@ -427,40 +358,22 @@ function setupTools(server: McpServer<any>, db: DatabaseManager) {
 					],
 				};
 			} catch (error) {
-				return {
-					content: [
-						{
-							type: 'text' as const,
-							text: JSON.stringify(
-								{
-									error: 'internal_error',
-									message:
-										error instanceof Error
-											? error.message
-											: 'Unknown error',
-								},
-								null,
-								2,
-							),
-						},
-					],
-					isError: true,
-				};
+				return make_error_response(error);
 			}
 		},
 	);
 
-	// Tool: Delete Observations
 	server.tool<typeof DeleteObservationsSchema>(
 		{
 			name: 'delete_observations',
-			description:
-				'Delete specific observations from an existing entity by content match. Returns the count of deleted observations. Throws if the entity does not exist.',
+			description: `Delete specific observations from an existing entity by exact content match. Returns the count of deleted observations. Throws if the entity does not exist.
+
+Use this to correct outdated or incorrect facts. The match is exact - provide the observation string exactly as stored.`,
 			schema: DeleteObservationsSchema,
 		},
-		async ({ entityName, observations }) => {
+		async ({ project, entityName, observations }) => {
 			try {
-				const deleted = await db.delete_observations(entityName, observations);
+				const deleted = await db.delete_observations(project, entityName, observations);
 				return {
 					content: [
 						{
@@ -470,78 +383,39 @@ function setupTools(server: McpServer<any>, db: DatabaseManager) {
 					],
 				};
 			} catch (error) {
-				return {
-					content: [
-						{
-							type: 'text' as const,
-							text: JSON.stringify(
-								{
-									error: 'internal_error',
-									message:
-										error instanceof Error
-											? error.message
-											: 'Unknown error',
-								},
-								null,
-								2,
-							),
-						},
-					],
-					isError: true,
-				};
+				return make_error_response(error);
 			}
 		},
 	);
 
-	// Tool: Search Related Nodes
 	server.tool<typeof SearchRelatedNodesSchema>(
 		{
 			name: 'search_related_nodes',
-			description:
-				'Get an entity along with all its directly related entities. Optionally filter by entityType (e.g. "task") and/or relationType (e.g. "implements").',
+			description: `Get an entity along with all its directly related entities within the given project. Optionally filter by entityType (e.g. "task") and/or relationType (e.g. "implements").
+
+KEY USE CASE: Call search_related_nodes(project=..., name="project/<current-project>", entityType="task") to find ALL task entities for a project - this is the most reliable way to discover in-progress work.
+
+Relations are traversed at 1-hop depth. Use get_entity_with_relations for full relation details including the related entity data.`,
 			schema: SearchRelatedNodesSchema,
 		},
-		async ({ name, entityType, relationType }) => {
+		async ({ project, name, entityType, relationType }) => {
 			try {
 				const result = await db.search_related_nodes(
+					project,
 					name,
 					entityType,
 					relationType,
 				);
 				return {
-					content: [
-						{
-							type: 'text' as const,
-							text: JSON.stringify(result, null, 2),
-						},
-					],
+					content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
 				};
 			} catch (error) {
-				return {
-					content: [
-						{
-							type: 'text' as const,
-							text: JSON.stringify(
-								{
-									error: 'internal_error',
-									message:
-										error instanceof Error
-											? error.message
-											: 'Unknown error',
-								},
-								null,
-								2,
-							),
-						},
-					],
-					isError: true,
-				};
+				return make_error_response(error);
 			}
 		},
 	);
 }
 
-// Start the server
 async function main() {
 	const config = get_database_config();
 	const db = await DatabaseManager.get_instance(config);
@@ -551,8 +425,7 @@ async function main() {
 		{
 			name,
 			version,
-			description:
-				'SQLite-based persistent memory tool for MCP with text search',
+			description: 'SQLite-based persistent memory tool for MCP with text search and project scoping',
 		},
 		{
 			adapter,
@@ -569,9 +442,60 @@ async function main() {
 		process.exit(0);
 	});
 
-	const transport = new StdioTransport(server);
-	transport.listen();
-	console.error(`SQLite Memory MCP server running on stdio (${config.dbPath})`);
+	const port = parseInt(process.env.MCP_PORT ?? '3000', 10);
+	const http_transport = new HttpTransport(server, { path: '/mcp', cors: true });
+
+	const http_server = createServer(async (req, res) => {
+		const url = `http://localhost:${port}${req.url}`;
+		const headers: Record<string, string> = {};
+		for (const [key, value] of Object.entries(req.headers)) {
+			if (typeof value === 'string') {
+				headers[key] = value;
+			} else if (Array.isArray(value)) {
+				headers[key] = value.join(', ');
+			}
+		}
+
+		const chunks: Buffer[] = [];
+		for await (const chunk of req) {
+			chunks.push(chunk);
+		}
+		const body = chunks.length > 0 ? Buffer.concat(chunks) : undefined;
+
+		const fetch_request = new Request(url, {
+			method: req.method,
+			headers,
+			body: body && body.length > 0 ? body : undefined,
+		});
+
+		const fetch_response = await http_transport.respond(fetch_request);
+
+		if (!fetch_response) {
+			res.writeHead(404);
+			res.end();
+			return;
+		}
+
+		res.writeHead(fetch_response.status, Object.fromEntries(fetch_response.headers.entries()));
+		res.flushHeaders();
+
+		if (fetch_response.body) {
+			const reader = fetch_response.body.getReader();
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				res.write(value);
+			}
+		}
+
+		res.end();
+	});
+
+	process.on('SIGINT', () => http_server.close());
+
+	http_server.listen(port, () => {
+		console.error(`SQLite Memory MCP server running on http://localhost:${port}/mcp (${config.dbPath})`);
+	});
 }
 
 main().catch(console.error);
