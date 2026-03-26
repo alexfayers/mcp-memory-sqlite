@@ -301,6 +301,28 @@ Add to your Claude Desktop configuration:
 - **entities_fts**: FTS5 virtual table for full-text search (with
   sync triggers)
 
+## Migrating from Old Single-Project Databases
+
+If you have existing single-project memory databases (e.g., `global.db`, `project.db`), use the `alexfayers-mcp-memory-sqlite-migrate` tool to import them into the new unified multi-project database:
+
+**Migrate global memory:**
+```bash
+alexfayers-mcp-memory-sqlite-migrate --source ~/.memory/global.db --project global --dest ~/.memory/memory.db
+```
+
+**Migrate project memory (run from project root):**
+```bash
+alexfayers-mcp-memory-sqlite-migrate --source .memory/project.db --project "$(basename "$PWD")" --dest ~/.memory/memory.db
+```
+
+The tool will:
+- Create the destination DB if it doesn't exist
+- Run all schema migrations automatically
+- Import entities with their observations
+- Import relations between entities
+- Skip entities with no observations
+- Deduplicate observations that already exist
+
 ## Development
 
 ```bash

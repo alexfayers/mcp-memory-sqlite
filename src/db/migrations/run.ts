@@ -40,6 +40,7 @@ export function run_migrations(db: Database.Database): void {
 				).version
 			: 0;
 
+	db.pragma('foreign_keys = OFF');
 	const apply = db.transaction(() => {
 		for (const migration of migrations) {
 			if (migration.version <= current_version) continue;
@@ -51,8 +52,8 @@ export function run_migrations(db: Database.Database): void {
 			);
 		}
 	});
-
 	apply();
+	db.pragma('foreign_keys = ON');
 }
 
 async function run_migrations_cli() {
@@ -61,11 +62,11 @@ async function run_migrations_cli() {
 	const db = db_manager.get_client();
 
 	try {
-		console.log('Starting migrations...');
+		console.log(`[${new Date().toISOString()}] Starting migrations...`);
 		run_migrations(db);
-		console.log('Migrations completed successfully');
+		console.log(`[${new Date().toISOString()}] Migrations completed successfully`);
 	} catch (error) {
-		console.error('Error running migrations:', error);
+		console.error(`[${new Date().toISOString()}] Error running migrations:`, error);
 		throw error;
 	} finally {
 		await db_manager.close();
@@ -77,7 +78,7 @@ if (process.argv[1] === __filename) {
 	run_migrations_cli()
 		.then(() => process.exit(0))
 		.catch((error) => {
-			console.error(error);
+			console.error(`[${new Date().toISOString()}]`, error);
 			process.exit(1);
 		});
 }

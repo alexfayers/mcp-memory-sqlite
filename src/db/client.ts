@@ -23,7 +23,6 @@ export class DatabaseManager {
 		this.db.pragma('journal_mode = WAL');
 		this.db.pragma('synchronous = NORMAL');
 		this.db.pragma('cache_size = 1000');
-		this.db.pragma('foreign_keys = ON');
 		this.db.pragma('temp_store = MEMORY');
 	}
 
@@ -455,7 +454,7 @@ export class DatabaseManager {
 				relatedEntities.push(related_entity);
 			} catch (error) {
 				console.warn(
-					`Related entity "${related_name}" not found: ${
+					`[${new Date().toISOString()}] Related entity "${related_name}" not found: ${
 						error instanceof Error ? error.message : String(error)
 					}`,
 				);
@@ -559,7 +558,7 @@ export class DatabaseManager {
 		try {
 			this.db.close();
 		} catch (error) {
-			console.error('Error closing database connection:', error);
+			console.error(`[${new Date().toISOString()}] Error closing database connection:`, error);
 		}
 	}
 }

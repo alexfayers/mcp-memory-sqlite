@@ -494,7 +494,7 @@ async function main() {
 	process.on('SIGINT', () => http_server.close());
 
 	http_server.listen(port, () => {
-		console.error(`SQLite Memory MCP server running on http://localhost:${port}/mcp (${config.dbPath})`);
+		console.error(`[${new Date().toISOString()}] SQLite Memory MCP server running on http://localhost:${port}/mcp (${config.dbPath})`);
 	});
 }
 
