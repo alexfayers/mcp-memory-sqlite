@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { run_migrations } from './migrations/run.js';
-import { Entity, Relation, SearchResult } from '../types/index.js';
+import { Entity, EntityStatus, Relation, SearchResult } from '../types/index.js';
 
 interface DatabaseConfig {
 	dbPath: string;
@@ -75,16 +75,16 @@ export class DatabaseManager {
 
 	private get_entity_row(
 		id: number,
-	): { id: number; name: string; entity_type: string; project_id: number } | undefined {
+	): { id: number; name: string; entity_type: string; project_id: number; status: string | null } | undefined {
 		return this.db
 			.prepare(
-				`SELECT e.id, e.name, t.name AS entity_type, e.project_id
+				`SELECT e.id, e.name, t.name AS entity_type, e.project_id, e.status
 				FROM entities e
 				JOIN entity_types t ON t.id = e.entity_type_id
 				WHERE e.id = ?`,
 			)
 			.get(id) as
-			| { id: number; name: string; entity_type: string; project_id: number }
+			| { id: number; name: string; entity_type: string; project_id: number; status: string | null }
 			| undefined;
 	}
 
@@ -101,6 +101,7 @@ export class DatabaseManager {
 			name: string;
 			entityType: string;
 			observations: string[];
+			status?: EntityStatus | null;
 		}>,
 	): Promise<void> {
 		const transaction = this.db.transaction(() => {
@@ -150,15 +151,15 @@ export class DatabaseManager {
 				if (entityId !== undefined) {
 					this.db
 						.prepare(
-							'UPDATE entities SET entity_type_id = ? WHERE id = ?',
+							'UPDATE entities SET entity_type_id = ?, status = COALESCE(?, status) WHERE id = ?',
 						)
-						.run(entityTypeId, entityId);
+						.run(entityTypeId, entity.status ?? null, entityId);
 				} else {
 					const result = this.db
 						.prepare(
-							'INSERT INTO entities (name, entity_type_id, project_id) VALUES (?, ?, ?)',
+							'INSERT INTO entities (name, entity_type_id, project_id, status) VALUES (?, ?, ?, ?)',
 						)
-						.run(entity.name, entityTypeId, projectId);
+						.run(entity.name, entityTypeId, projectId, entity.status ?? null);
 					entityId = result.lastInsertRowid as number;
 				}
 
@@ -280,6 +281,7 @@ export class DatabaseManager {
 			name: row.name,
 			entityType: row.entity_type,
 			observations: this.get_observations_by_id(entityId),
+			status: (row.status as EntityStatus) ?? null,
 		};
 	}
 
@@ -296,23 +298,26 @@ export class DatabaseManager {
 		query: string,
 		limit: number = 10,
 		entityType?: string,
+		status?: EntityStatus,
 	): Promise<Entity[]> {
 		const effective_limit = Math.min(Math.max(1, limit), 50);
 		const type_filter = entityType ? ' AND t.name = ?' : '';
+		const status_filter = status !== undefined ? ' AND e.status = ?' : '';
 
 		const params: unknown[] = [this.sanitize_fts_query(query), project];
 		if (entityType) params.push(entityType);
+		if (status !== undefined) params.push(status);
 		params.push(effective_limit);
 
 		const results = this.db
 			.prepare(
 				`
-        SELECT e.id, e.name, t.name AS entity_type
+        SELECT e.id, e.name, t.name AS entity_type, e.status
         FROM entities_fts
         JOIN entities e ON entities_fts.rowid = e.id
         JOIN entity_types t ON t.id = e.entity_type_id
         JOIN projects p ON p.id = e.project_id
-        WHERE entities_fts MATCH ? AND p.name = ?${type_filter}
+        WHERE entities_fts MATCH ? AND p.name = ?${type_filter}${status_filter}
         ORDER BY bm25(entities_fts)
         LIMIT ?
       `,
@@ -321,33 +326,70 @@ export class DatabaseManager {
 			id: number;
 			name: string;
 			entity_type: string;
+			status: string | null;
 		}>;
 
 		return results.map((row) => ({
 			name: row.name,
 			entityType: row.entity_type,
 			observations: this.get_observations_by_id(row.id),
+			status: (row.status as EntityStatus) ?? null,
 		}));
 	}
 
-	async get_recent_entities(project: string, limit = 10): Promise<Entity[]> {
+	async get_recent_entities(
+		project: string,
+		limit = 10,
+		status?: EntityStatus,
+	): Promise<Entity[]> {
+		const status_filter = status !== undefined ? ' AND e.status = ?' : '';
+		const params: unknown[] = [project];
+		if (status !== undefined) params.push(status);
+		params.push(limit);
+
 		const results = this.db
 			.prepare(
-				`SELECT e.id, e.name, t.name AS entity_type
+				`SELECT e.id, e.name, t.name AS entity_type, e.status
 				FROM entities e
 				JOIN entity_types t ON t.id = e.entity_type_id
 				JOIN projects p ON p.id = e.project_id
-				WHERE p.name = ?
+				WHERE p.name = ?${status_filter}
 				ORDER BY e.created_at DESC
 				LIMIT ?`,
 			)
-			.all(project, limit) as Array<{ id: number; name: string; entity_type: string }>;
+			.all(...params) as Array<{ id: number; name: string; entity_type: string; status: string | null }>;
 
 		return results.map((row) => ({
 			name: row.name,
 			entityType: row.entity_type,
 			observations: this.get_observations_by_id(row.id),
+			status: (row.status as EntityStatus) ?? null,
 		}));
+	}
+
+	async set_entity_status(
+		project: string,
+		name: string,
+		status: EntityStatus | null,
+	): Promise<void> {
+		try {
+			const projectId = this.get_or_create_project_id(project);
+			const entityId = this.get_entity_id(name, projectId);
+
+			if (entityId === undefined) {
+				throw new Error(`Entity not found: ${name}`);
+			}
+
+			this.db
+				.prepare('UPDATE entities SET status = ? WHERE id = ?')
+				.run(status, entityId);
+		} catch (error) {
+			throw new Error(
+				`Failed to set status for "${name}": ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			);
+		}
 	}
 
 	async create_relations(project: string, relations: Relation[]): Promise<void> {
@@ -575,11 +617,11 @@ export class DatabaseManager {
 		return { entity, relations, relatedEntities };
 	}
 
-	async read_graph(project: string): Promise<{
-		entities: Entity[];
-		relations: Relation[];
-	}> {
-		const recent_entities = await this.get_recent_entities(project);
+	async read_graph(
+		project: string,
+		status?: EntityStatus,
+	): Promise<{ entities: Entity[]; relations: Relation[] }> {
+		const recent_entities = await this.get_recent_entities(project, 10, status);
 		const relations = await this.get_relations_for_entities(project, recent_entities);
 		return { entities: recent_entities, relations };
 	}
@@ -589,6 +631,7 @@ export class DatabaseManager {
 		query: string,
 		limit: number = 10,
 		entityType?: string,
+		status?: EntityStatus,
 	): Promise<{ entities: Entity[]; relations: Relation[] }> {
 		try {
 			if (typeof query !== 'string') {
@@ -598,7 +641,7 @@ export class DatabaseManager {
 				throw new Error('Text query cannot be empty');
 			}
 
-			const entities = await this.search_entities(project, query, limit, entityType);
+			const entities = await this.search_entities(project, query, limit, entityType, status);
 
 			if (entities.length === 0) {
 				return { entities: [], relations: [] };

@@ -10,7 +10,7 @@ import { fileURLToPath } from 'url';
 import * as v from 'valibot';
 import { DatabaseManager } from './db/client.js';
 import { get_database_config } from './db/config.js';
-import { Relation } from './types/index.js';
+import { EntityStatus, Relation } from './types/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -30,6 +30,9 @@ Entity naming conventions (prefix with entity type to avoid collisions):
 - pattern/<short-noun> (e.g. pattern/retry-logic)
 - changelog/<TICKET-ID>-<slug> or changelog/<project>-<date>-<slug>`.trim();
 
+const VALID_STATUSES = ['planned', 'in-progress', 'blocked', 'resolved', 'archived'] as const;
+const StatusSchema = v.optional(v.nullable(v.picklist(VALID_STATUSES)));
+
 const CreateEntitiesSchema = v.object({
 	project: v.string(),
 	entities: v.array(
@@ -37,6 +40,7 @@ const CreateEntitiesSchema = v.object({
 			name: v.string(),
 			entityType: v.string(),
 			observations: v.array(v.string()),
+			status: StatusSchema,
 			relations: v.optional(
 				v.array(
 					v.object({
@@ -55,10 +59,18 @@ const SearchNodesSchema = v.object({
 	query: v.string(),
 	limit: v.optional(v.number()),
 	entityType: v.optional(v.string()),
+	status: v.optional(v.picklist(VALID_STATUSES)),
 });
 
 const ReadGraphSchema = v.object({
 	project: v.string(),
+	status: v.optional(v.picklist(VALID_STATUSES)),
+});
+
+const SetEntityStatusSchema = v.object({
+	project: v.string(),
+	name: v.string(),
+	status: v.nullable(v.picklist(VALID_STATUSES)),
 });
 
 const CreateRelationsSchema = v.object({
@@ -199,9 +211,9 @@ USAGE GUIDANCE:
 - Multi-word queries match terms independently (OR semantics with BM25 ranking)`,
 			schema: SearchNodesSchema,
 		},
-		async ({ project, query, limit, entityType }) => {
+		async ({ project, query, limit, entityType, status }) => {
 			try {
-				const result = await db.search_nodes(project, query, limit, entityType);
+				const result = await db.search_nodes(project, query, limit, entityType, status as EntityStatus | undefined);
 				return {
 					content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
 				};
@@ -217,9 +229,9 @@ USAGE GUIDANCE:
 			description: `Get the most recent entities and their relations for the given project. Returns up to 10 recent entities. Use this as a starting point to discover what is already known - call this first before any task, then use search_nodes and get_entity_with_relations for deeper context.`,
 			schema: ReadGraphSchema,
 		},
-		async ({ project }) => {
+		async ({ project, status }) => {
 			try {
-				const result = await db.read_graph(project);
+				const result = await db.read_graph(project, status as EntityStatus | undefined);
 				return {
 					content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
 				};
@@ -379,6 +391,39 @@ Use this to correct outdated or incorrect facts. The match is exact - provide th
 						{
 							type: 'text' as const,
 							text: `Deleted ${deleted} observation${deleted === 1 ? '' : 's'} from entity "${entityName}"`,
+						},
+					],
+				};
+			} catch (error) {
+				return make_error_response(error);
+			}
+		},
+	);
+
+	server.tool<typeof SetEntityStatusSchema>(
+		{
+			name: 'set_entity_status',
+			description: `Set or clear the status of an entity. Use null to remove lifecycle tracking from an entity.
+
+Valid statuses: planned, in-progress, blocked, resolved, archived
+- planned: work is queued but not started
+- in-progress: actively being worked on
+- blocked: waiting on an external dependency
+- resolved: work is complete
+- archived: no longer relevant but preserved for history
+
+Use this instead of STATUS: observation text when you want structured, filterable lifecycle state.`,
+			schema: SetEntityStatusSchema,
+		},
+		async ({ project, name, status }) => {
+			try {
+				await db.set_entity_status(project, name, status as EntityStatus | null);
+				const statusText = status ?? 'null (cleared)';
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: `Set status of "${name}" to ${statusText}`,
 						},
 					],
 				};

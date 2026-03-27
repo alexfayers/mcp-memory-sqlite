@@ -555,4 +555,11 @@ export const migrations: Migration[] = [
 			END`,
 		],
 	},
+	{
+		version: 14,
+		statements: [
+			`ALTER TABLE entities ADD COLUMN status TEXT`,
+			`CREATE INDEX IF NOT EXISTS idx_entities_status ON entities(status)`,
+		],
+	},
 ];

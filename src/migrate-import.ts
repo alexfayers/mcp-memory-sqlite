@@ -30,12 +30,12 @@ async function main() {
 
 	const entities = source_db
 		.prepare(
-			`SELECT e.id, e.name, t.name AS entity_type
+			`SELECT e.id, e.name, t.name AS entity_type, e.status
 			FROM entities e
 			JOIN entity_types t ON t.id = e.entity_type_id
 			JOIN projects p ON p.id = e.project_id`,
 		)
-		.all() as Array<{ id: number; name: string; entity_type: string }>;
+		.all() as Array<{ id: number; name: string; entity_type: string; status: string | null }>;
 
 	mkdirSync(dirname(values.dest as string), { recursive: true });
 	const dest_db = new Database(values.dest as string);
@@ -83,8 +83,8 @@ async function main() {
 				dest_entity_id = existing.id;
 			} else {
 				const result = dest_db
-					.prepare('INSERT INTO entities (name, entity_type_id, project_id) VALUES (?, ?, ?)')
-					.run(entity.name, type_row.id, project_row.id);
+					.prepare('INSERT INTO entities (name, entity_type_id, project_id, status) VALUES (?, ?, ?, ?)')
+					.run(entity.name, type_row.id, project_row.id, entity.status ?? null);
 				dest_entity_id = result.lastInsertRowid as number;
 				entity_count++;
 			}
