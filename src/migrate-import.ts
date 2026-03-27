@@ -138,10 +138,10 @@ async function main() {
 						.prepare('SELECT id FROM relation_types WHERE name = ?')
 						.get(rel.relation_type) as { id: number };
 
-					dest_db
+					const rel_result = dest_db
 						.prepare('INSERT OR IGNORE INTO relations (source_id, target_id, relation_type_id) VALUES (?, ?, ?)')
 						.run(source_entity.id, target_entity.id, rel_type_row.id);
-					relation_count++;
+					if (rel_result.changes > 0) relation_count++;
 				} catch (error) {
 					console.error(`[${new Date().toISOString()}]   skipping relation ${rel.source} -> ${rel.target}: ${error instanceof Error ? error.message : String(error)}`);
 				}
