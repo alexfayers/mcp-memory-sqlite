@@ -156,7 +156,7 @@ OBSERVATION RULES:
 ${ENTITY_NAMING_GUIDE}
 
 TASK ENTITY DISCIPLINE:
-- Every task/ entity MUST include a STATUS: observation: "STATUS: in-progress", "STATUS: blocked", or "STATUS: complete"
+- Set the entity status field (planned/in-progress/blocked/resolved/archived) instead of adding a "STATUS:" observation
 - Task entities MUST be linked to their parent project with a belongs-to relation
 - CRITICAL: Always call create_relations after create_entities - relations are the core of the graph
 
@@ -206,7 +206,7 @@ RELATION TYPES: task implements feature, task belongs-to project, feature belong
 USAGE GUIDANCE:
 - Search for keywords from the user's message (e.g. file names, feature names, ticket IDs)
 - Always search for "user-preferences" to find workflow and coding style rules
-- Always search for "STATUS in-progress" to find any unfinished task entities
+- Use status filter "in-progress" to find any unfinished task entities (preferred over text search)
 - Search for relevant pattern/ entities related to tools/services being used
 - Multi-word queries match terms independently (OR semantics with BM25 ranking)`,
 			schema: SearchNodesSchema,
