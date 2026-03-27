@@ -298,7 +298,7 @@ export class DatabaseManager {
 		entityType?: string,
 	): Promise<Entity[]> {
 		const effective_limit = Math.min(Math.max(1, limit), 50);
-		const type_filter = entityType ? ' AND entities_fts.entity_type = ?' : '';
+		const type_filter = entityType ? ' AND t.name = ?' : '';
 
 		const params: unknown[] = [this.sanitize_fts_query(query), project];
 		if (entityType) params.push(entityType);
@@ -311,7 +311,8 @@ export class DatabaseManager {
         FROM entities_fts
         JOIN entities e ON entities_fts.rowid = e.id
         JOIN entity_types t ON t.id = e.entity_type_id
-        WHERE entities_fts MATCH ? AND entities_fts.project = ?${type_filter}
+        JOIN projects p ON p.id = e.project_id
+        WHERE entities_fts MATCH ? AND p.name = ?${type_filter}
         ORDER BY bm25(entities_fts)
         LIMIT ?
       `,
