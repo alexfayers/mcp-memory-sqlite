@@ -440,4 +440,37 @@ export const migrations: Migration[] = [
 			END`,
 		],
 	},
+	{
+		version: 11,
+		statements: [
+			`CREATE TABLE relation_types (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				name TEXT NOT NULL,
+				UNIQUE(name)
+			)`,
+			`INSERT INTO relation_types (name) SELECT DISTINCT relation_type FROM relations`,
+			`ALTER TABLE relations RENAME TO relations_old`,
+			`CREATE TABLE relations (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				source_id INTEGER NOT NULL,
+				target_id INTEGER NOT NULL,
+				relation_type_id INTEGER NOT NULL,
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				FOREIGN KEY (source_id) REFERENCES entities(id),
+				FOREIGN KEY (target_id) REFERENCES entities(id),
+				FOREIGN KEY (relation_type_id) REFERENCES relation_types(id),
+				UNIQUE(source_id, target_id, relation_type_id)
+			)`,
+			`INSERT INTO relations (id, source_id, target_id, relation_type_id, created_at)
+				SELECT r.id, r.source_id, r.target_id, t.id, r.created_at
+				FROM relations_old r
+				JOIN relation_types t ON t.name = r.relation_type`,
+			`DROP TABLE relations_old`,
+			`DROP INDEX IF EXISTS idx_relations_source_id`,
+			`DROP INDEX IF EXISTS idx_relations_target_id`,
+			`CREATE INDEX IF NOT EXISTS idx_relations_source_id ON relations(source_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_relations_target_id ON relations(target_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_relation_types_name ON relation_types(name)`,
+		],
+	},
 ];

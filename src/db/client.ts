@@ -56,6 +56,16 @@ export class DatabaseManager {
 		return row.id;
 	}
 
+	private get_or_create_relation_type_id(relationType: string): number {
+		this.db
+			.prepare('INSERT OR IGNORE INTO relation_types (name) VALUES (?)')
+			.run(relationType);
+		const row = this.db
+			.prepare('SELECT id FROM relation_types WHERE name = ?')
+			.get(relationType) as { id: number };
+		return row.id;
+	}
+
 	private get_entity_id(name: string, projectId: number): number | undefined {
 		const row = this.db
 			.prepare('SELECT id FROM entities WHERE name = ? AND project_id = ?')
@@ -346,11 +356,12 @@ export class DatabaseManager {
 			const transaction = this.db.transaction(() => {
 				const projectId = this.get_or_create_project_id(project);
 				const insert = this.db.prepare(
-					'INSERT OR IGNORE INTO relations (source_id, target_id, relation_type) VALUES (?, ?, ?)',
+					'INSERT OR IGNORE INTO relations (source_id, target_id, relation_type_id) VALUES (?, ?, ?)',
 				);
 				for (const relation of relations) {
 					const sourceId = this.get_entity_id(relation.from, projectId);
 					const targetId = this.get_entity_id(relation.to, projectId);
+					const relationTypeId = this.get_or_create_relation_type_id(relation.relationType);
 
 					if (sourceId === undefined) {
 						throw new Error(
@@ -363,7 +374,7 @@ export class DatabaseManager {
 						);
 					}
 
-					insert.run(sourceId, targetId, relation.relationType);
+					insert.run(sourceId, targetId, relationTypeId);
 				}
 			});
 
@@ -429,11 +440,21 @@ export class DatabaseManager {
 				);
 			}
 
+			const relationTypeId = this.db
+				.prepare('SELECT id FROM relation_types WHERE name = ?')
+				.get(type) as { id: number } | undefined;
+
+			if (!relationTypeId) {
+				throw new Error(
+					`Relation not found: ${source} -> ${target} (${type})`,
+				);
+			}
+
 			const result = this.db
 				.prepare(
-					'DELETE FROM relations WHERE source_id = ? AND target_id = ? AND relation_type = ?',
+					'DELETE FROM relations WHERE source_id = ? AND target_id = ? AND relation_type_id = ?',
 				)
-				.run(sourceId, targetId, type);
+				.run(sourceId, targetId, relationTypeId.id);
 
 			if (result.changes === 0) {
 				throw new Error(
@@ -467,10 +488,11 @@ export class DatabaseManager {
 		const results = this.db
 			.prepare(
 				`
-        SELECT es.name AS from_entity, et.name AS to_entity, r.relation_type
+        SELECT es.name AS from_entity, et.name AS to_entity, rt.name AS relation_type
         FROM relations r
         JOIN entities es ON es.id = r.source_id
         JOIN entities et ON et.id = r.target_id
+        JOIN relation_types rt ON rt.id = r.relation_type_id
         WHERE r.source_id IN (${placeholders})
         OR r.target_id IN (${placeholders})
       `,
