@@ -135,4 +135,22 @@ export const migrations: Migration[] = [
 			`CREATE TRIGGER IF NOT EXISTS observations_fts_delete AFTER DELETE ON observations BEGIN INSERT INTO entities_fts(entities_fts, rowid, name, entity_type, observations, project) VALUES('delete', (SELECT rowid FROM entities WHERE name = old.entity_name), (SELECT name FROM entities WHERE name = old.entity_name), (SELECT entity_type FROM entities WHERE name = old.entity_name), '', (SELECT project FROM entities WHERE name = old.entity_name)); INSERT INTO entities_fts(rowid, name, entity_type, observations, project) SELECT rowid, name, entity_type, (SELECT GROUP_CONCAT(content, ' ') FROM observations WHERE entity_name = old.entity_name), project FROM entities WHERE name = old.entity_name; END`,
 		],
 	},
+	{
+		version: 7,
+		statements: [
+			`ALTER TABLE observations RENAME TO observations_old`,
+			`CREATE TABLE observations (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				entity_name TEXT NOT NULL,
+				content TEXT NOT NULL,
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			)`,
+			`INSERT INTO observations SELECT * FROM observations_old`,
+			`DROP TABLE observations_old`,
+			`DROP TRIGGER IF EXISTS observations_fts_insert`,
+			`DROP TRIGGER IF EXISTS observations_fts_delete`,
+			`CREATE TRIGGER IF NOT EXISTS observations_fts_insert AFTER INSERT ON observations BEGIN INSERT INTO entities_fts(entities_fts, rowid, name, entity_type, observations, project) VALUES('delete', (SELECT rowid FROM entities WHERE name = new.entity_name), (SELECT name FROM entities WHERE name = new.entity_name), (SELECT entity_type FROM entities WHERE name = new.entity_name), '', (SELECT project FROM entities WHERE name = new.entity_name)); INSERT INTO entities_fts(rowid, name, entity_type, observations, project) SELECT rowid, name, entity_type, (SELECT GROUP_CONCAT(content, ' ') FROM observations WHERE entity_name = new.entity_name), project FROM entities WHERE name = new.entity_name; END`,
+			`CREATE TRIGGER IF NOT EXISTS observations_fts_delete AFTER DELETE ON observations BEGIN INSERT INTO entities_fts(entities_fts, rowid, name, entity_type, observations, project) VALUES('delete', (SELECT rowid FROM entities WHERE name = old.entity_name), (SELECT name FROM entities WHERE name = old.entity_name), (SELECT entity_type FROM entities WHERE name = old.entity_name), '', (SELECT project FROM entities WHERE name = old.entity_name)); INSERT INTO entities_fts(rowid, name, entity_type, observations, project) SELECT rowid, name, entity_type, (SELECT GROUP_CONCAT(content, ' ') FROM observations WHERE entity_name = old.entity_name), project FROM entities WHERE name = old.entity_name; END`,
+		],
+	},
 ];
