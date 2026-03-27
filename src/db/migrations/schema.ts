@@ -473,4 +473,21 @@ export const migrations: Migration[] = [
 			`CREATE INDEX IF NOT EXISTS idx_relation_types_name ON relation_types(name)`,
 		],
 	},
+	{
+		version: 12,
+		statements: [
+			`ALTER TABLE observations RENAME TO observations_old`,
+			`CREATE TABLE observations (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				entity_id INTEGER NOT NULL,
+				content TEXT NOT NULL,
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				FOREIGN KEY (entity_id) REFERENCES entities(id)
+			)`,
+			`INSERT INTO observations SELECT * FROM observations_old`,
+			`DROP TABLE observations_old`,
+			`DROP INDEX IF EXISTS idx_observations_entity_id`,
+			`CREATE INDEX IF NOT EXISTS idx_observations_entity_id ON observations(entity_id)`,
+		],
+	},
 ];
