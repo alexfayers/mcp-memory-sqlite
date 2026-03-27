@@ -36,6 +36,55 @@ export class DatabaseManager {
 		return DatabaseManager.instance;
 	}
 
+	private get_or_create_project_id(project: string): number {
+		this.db
+			.prepare('INSERT OR IGNORE INTO projects (name) VALUES (?)')
+			.run(project);
+		const row = this.db
+			.prepare('SELECT id FROM projects WHERE name = ?')
+			.get(project) as { id: number };
+		return row.id;
+	}
+
+	private get_or_create_entity_type_id(entityType: string): number {
+		this.db
+			.prepare('INSERT OR IGNORE INTO entity_types (name) VALUES (?)')
+			.run(entityType);
+		const row = this.db
+			.prepare('SELECT id FROM entity_types WHERE name = ?')
+			.get(entityType) as { id: number };
+		return row.id;
+	}
+
+	private get_entity_id(name: string, projectId: number): number | undefined {
+		const row = this.db
+			.prepare('SELECT id FROM entities WHERE name = ? AND project_id = ?')
+			.get(name, projectId) as { id: number } | undefined;
+		return row?.id;
+	}
+
+	private get_entity_row(
+		id: number,
+	): { id: number; name: string; entity_type: string; project_id: number } | undefined {
+		return this.db
+			.prepare(
+				`SELECT e.id, e.name, t.name AS entity_type, e.project_id
+				FROM entities e
+				JOIN entity_types t ON t.id = e.entity_type_id
+				WHERE e.id = ?`,
+			)
+			.get(id) as
+			| { id: number; name: string; entity_type: string; project_id: number }
+			| undefined;
+	}
+
+	private get_observations_by_id(entityId: number): string[] {
+		const rows = this.db
+			.prepare('SELECT content FROM observations WHERE entity_id = ?')
+			.all(entityId) as Array<{ content: string }>;
+		return rows.map((r) => r.content);
+	}
+
 	async create_entities(
 		project: string,
 		entities: Array<{
@@ -45,6 +94,8 @@ export class DatabaseManager {
 		}>,
 	): Promise<void> {
 		const transaction = this.db.transaction(() => {
+			const projectId = this.get_or_create_project_id(project);
+
 			for (const entity of entities) {
 				if (
 					!entity.name ||
@@ -83,33 +134,33 @@ export class DatabaseManager {
 					);
 				}
 
-				const existing = this.db
-					.prepare('SELECT name FROM entities WHERE name = ? AND project = ?')
-					.get(entity.name, project);
+				let entityId = this.get_entity_id(entity.name, projectId);
+				const entityTypeId = this.get_or_create_entity_type_id(entity.entityType);
 
-				if (existing) {
+				if (entityId !== undefined) {
 					this.db
 						.prepare(
-							'UPDATE entities SET entity_type = ? WHERE name = ? AND project = ?',
+							'UPDATE entities SET entity_type_id = ? WHERE id = ?',
 						)
-						.run(entity.entityType, entity.name, project);
+						.run(entityTypeId, entityId);
 				} else {
-					this.db
+					const result = this.db
 						.prepare(
-							'INSERT INTO entities (name, entity_type, project) VALUES (?, ?, ?)',
+							'INSERT INTO entities (name, entity_type_id, project_id) VALUES (?, ?, ?)',
 						)
-						.run(entity.name, entity.entityType, project);
+						.run(entity.name, entityTypeId, projectId);
+					entityId = result.lastInsertRowid as number;
 				}
 
 				this.db
-					.prepare('DELETE FROM observations WHERE entity_name = ? AND (SELECT project FROM entities WHERE name = ?) = ?')
-					.run(entity.name, entity.name, project);
+					.prepare('DELETE FROM observations WHERE entity_id = ?')
+					.run(entityId);
 
 				const insert_obs = this.db.prepare(
-					'INSERT INTO observations (entity_name, content) VALUES (?, ?)',
+					'INSERT INTO observations (entity_id, content) VALUES (?, ?)',
 				);
 				for (const observation of entity.observations) {
-					insert_obs.run(entity.name, observation);
+					insert_obs.run(entityId, observation);
 				}
 			}
 		});
@@ -131,19 +182,16 @@ export class DatabaseManager {
 		observations: string[],
 	): Promise<number> {
 		try {
-			const existing = this.db
-				.prepare('SELECT name FROM entities WHERE name = ? AND project = ?')
-				.get(entityName, project);
+			const projectId = this.get_or_create_project_id(project);
+			const entityId = this.get_entity_id(entityName, projectId);
 
-			if (!existing) {
+			if (entityId === undefined) {
 				throw new Error(`Entity not found: ${entityName}`);
 			}
 
 			const existing_obs = this.db
-				.prepare(
-					'SELECT content FROM observations WHERE entity_name = ?',
-				)
-				.all(entityName) as Array<{ content: string }>;
+				.prepare('SELECT content FROM observations WHERE entity_id = ?')
+				.all(entityId) as Array<{ content: string }>;
 
 			const existing_set = new Set(existing_obs.map((r) => r.content));
 			const new_observations = observations.filter(
@@ -152,11 +200,11 @@ export class DatabaseManager {
 
 			if (new_observations.length > 0) {
 				const insert = this.db.prepare(
-					'INSERT INTO observations (entity_name, content) VALUES (?, ?)',
+					'INSERT INTO observations (entity_id, content) VALUES (?, ?)',
 				);
 				const insert_all = this.db.transaction(() => {
 					for (const obs of new_observations) {
-						insert.run(entityName, obs);
+						insert.run(entityId, obs);
 					}
 				});
 				insert_all();
@@ -178,11 +226,10 @@ export class DatabaseManager {
 		observations: string[],
 	): Promise<number> {
 		try {
-			const existing = this.db
-				.prepare('SELECT name FROM entities WHERE name = ? AND project = ?')
-				.get(entityName, project);
+			const projectId = this.get_or_create_project_id(project);
+			const entityId = this.get_entity_id(entityName, projectId);
 
-			if (!existing) {
+			if (entityId === undefined) {
 				throw new Error(`Entity not found: ${entityName}`);
 			}
 
@@ -191,9 +238,9 @@ export class DatabaseManager {
 				for (const obs of observations) {
 					const result = this.db
 						.prepare(
-							'DELETE FROM observations WHERE entity_name = ? AND content = ?',
+							'DELETE FROM observations WHERE entity_id = ? AND content = ?',
 						)
-						.run(entityName, obs);
+						.run(entityId, obs);
 					deleted += result.changes;
 				}
 			});
@@ -210,26 +257,19 @@ export class DatabaseManager {
 	}
 
 	async get_entity(project: string, name: string): Promise<Entity> {
-		const entity_result = this.db
-			.prepare(
-				'SELECT name, entity_type FROM entities WHERE name = ? AND project = ?',
-			)
-			.get(name, project) as { name: string; entity_type: string } | undefined;
+		const projectId = this.get_or_create_project_id(project);
+		const entityId = this.get_entity_id(name, projectId);
 
-		if (!entity_result) {
+		if (entityId === undefined) {
 			throw new Error(`Entity not found: ${name}`);
 		}
 
-		const observations_result = this.db
-			.prepare(
-				'SELECT content FROM observations WHERE entity_name = ?',
-			)
-			.all(name) as Array<{ content: string }>;
+		const row = this.get_entity_row(entityId)!;
 
 		return {
-			name: entity_result.name,
-			entityType: entity_result.entity_type,
-			observations: observations_result.map((row) => row.content),
+			name: row.name,
+			entityType: row.entity_type,
+			observations: this.get_observations_by_id(entityId),
 		};
 	}
 
@@ -248,7 +288,7 @@ export class DatabaseManager {
 		entityType?: string,
 	): Promise<Entity[]> {
 		const effective_limit = Math.min(Math.max(1, limit), 50);
-		const type_filter = entityType ? ' AND e.entity_type = ?' : '';
+		const type_filter = entityType ? ' AND entities_fts.entity_type = ?' : '';
 
 		const params: unknown[] = [this.sanitize_fts_query(query), project];
 		if (entityType) params.push(entityType);
@@ -257,60 +297,46 @@ export class DatabaseManager {
 		const results = this.db
 			.prepare(
 				`
-        SELECT e.name, e.entity_type
+        SELECT e.id, e.name, t.name AS entity_type
         FROM entities_fts
-        JOIN entities e ON entities_fts.name = e.name
-        WHERE entities_fts MATCH ? AND e.project = ?${type_filter}
+        JOIN entities e ON entities_fts.rowid = e.id
+        JOIN entity_types t ON t.id = e.entity_type_id
+        WHERE entities_fts MATCH ? AND entities_fts.project = ?${type_filter}
         ORDER BY bm25(entities_fts)
         LIMIT ?
       `,
 			)
 			.all(...params) as Array<{
+			id: number;
 			name: string;
 			entity_type: string;
 		}>;
 
-		const entities: Entity[] = [];
-		for (const row of results) {
-			const observations = this.db
-				.prepare(
-					'SELECT content FROM observations WHERE entity_name = ?',
-				)
-				.all(row.name) as Array<{ content: string }>;
-
-			entities.push({
-				name: row.name,
-				entityType: row.entity_type,
-				observations: observations.map((obs) => obs.content),
-			});
-		}
-
-		return entities;
+		return results.map((row) => ({
+			name: row.name,
+			entityType: row.entity_type,
+			observations: this.get_observations_by_id(row.id),
+		}));
 	}
 
 	async get_recent_entities(project: string, limit = 10): Promise<Entity[]> {
 		const results = this.db
 			.prepare(
-				'SELECT name, entity_type FROM entities WHERE project = ? ORDER BY created_at DESC LIMIT ?',
+				`SELECT e.id, e.name, t.name AS entity_type
+				FROM entities e
+				JOIN entity_types t ON t.id = e.entity_type_id
+				JOIN projects p ON p.id = e.project_id
+				WHERE p.name = ?
+				ORDER BY e.created_at DESC
+				LIMIT ?`,
 			)
-			.all(project, limit) as Array<{ name: string; entity_type: string }>;
+			.all(project, limit) as Array<{ id: number; name: string; entity_type: string }>;
 
-		const entities: Entity[] = [];
-		for (const row of results) {
-			const observations = this.db
-				.prepare(
-					'SELECT content FROM observations WHERE entity_name = ?',
-				)
-				.all(row.name) as Array<{ content: string }>;
-
-			entities.push({
-				name: row.name,
-				entityType: row.entity_type,
-				observations: observations.map((obs) => obs.content),
-			});
-		}
-
-		return entities;
+		return results.map((row) => ({
+			name: row.name,
+			entityType: row.entity_type,
+			observations: this.get_observations_by_id(row.id),
+		}));
 	}
 
 	async create_relations(project: string, relations: Relation[]): Promise<void> {
@@ -318,15 +344,26 @@ export class DatabaseManager {
 			if (relations.length === 0) return;
 
 			const transaction = this.db.transaction(() => {
+				const projectId = this.get_or_create_project_id(project);
 				const insert = this.db.prepare(
-					'INSERT OR IGNORE INTO relations (source, target, relation_type) VALUES (?, ?, ?)',
+					'INSERT OR IGNORE INTO relations (source_id, target_id, relation_type) VALUES (?, ?, ?)',
 				);
 				for (const relation of relations) {
-					insert.run(
-						relation.from,
-						relation.to,
-						relation.relationType,
-					);
+					const sourceId = this.get_entity_id(relation.from, projectId);
+					const targetId = this.get_entity_id(relation.to, projectId);
+
+					if (sourceId === undefined) {
+						throw new Error(
+							`Source entity not found: ${relation.from}`,
+						);
+					}
+					if (targetId === undefined) {
+						throw new Error(
+							`Target entity not found: ${relation.to}`,
+						);
+					}
+
+					insert.run(sourceId, targetId, relation.relationType);
 				}
 			});
 
@@ -342,28 +379,27 @@ export class DatabaseManager {
 
 	async delete_entity(project: string, name: string): Promise<void> {
 		try {
-			const existing = this.db
-				.prepare('SELECT name FROM entities WHERE name = ? AND project = ?')
-				.get(name, project);
+			const projectId = this.get_or_create_project_id(project);
+			const entityId = this.get_entity_id(name, projectId);
 
-			if (!existing) {
+			if (entityId === undefined) {
 				throw new Error(`Entity not found: ${name}`);
 			}
 
 			const transaction = this.db.transaction(() => {
 				this.db
-					.prepare('DELETE FROM observations WHERE entity_name = ?')
-					.run(name);
+					.prepare('DELETE FROM observations WHERE entity_id = ?')
+					.run(entityId);
 
 				this.db
 					.prepare(
-						'DELETE FROM relations WHERE source = ? OR target = ?',
+						'DELETE FROM relations WHERE source_id = ? OR target_id = ?',
 					)
-					.run(name, name);
+					.run(entityId, entityId);
 
 				this.db
-					.prepare('DELETE FROM entities WHERE name = ? AND project = ?')
-					.run(name, project);
+					.prepare('DELETE FROM entities WHERE id = ?')
+					.run(entityId);
 			});
 
 			transaction();
@@ -383,11 +419,21 @@ export class DatabaseManager {
 		type: string,
 	): Promise<void> {
 		try {
+			const projectId = this.get_or_create_project_id(project);
+			const sourceId = this.get_entity_id(source, projectId);
+			const targetId = this.get_entity_id(target, projectId);
+
+			if (sourceId === undefined || targetId === undefined) {
+				throw new Error(
+					`Relation not found: ${source} -> ${target} (${type})`,
+				);
+			}
+
 			const result = this.db
 				.prepare(
-					'DELETE FROM relations WHERE source = ? AND target = ? AND relation_type = ?',
+					'DELETE FROM relations WHERE source_id = ? AND target_id = ? AND relation_type = ?',
 				)
-				.run(source, target, type);
+				.run(sourceId, targetId, type);
 
 			if (result.changes === 0) {
 				throw new Error(
@@ -409,19 +455,27 @@ export class DatabaseManager {
 	): Promise<Relation[]> {
 		if (entities.length === 0) return [];
 
-		const entity_names = entities.map((e) => e.name);
-		const placeholders = entity_names.map(() => '?').join(',');
+		const projectId = this.get_or_create_project_id(project);
+		const ids = entities
+			.map((e) => this.get_entity_id(e.name, projectId))
+			.filter((id): id is number => id !== undefined);
+
+		if (ids.length === 0) return [];
+
+		const placeholders = ids.map(() => '?').join(',');
 
 		const results = this.db
 			.prepare(
 				`
-        SELECT source as from_entity, target as to_entity, relation_type
-        FROM relations
-        WHERE source IN (${placeholders})
-        OR target IN (${placeholders})
+        SELECT es.name AS from_entity, et.name AS to_entity, r.relation_type
+        FROM relations r
+        JOIN entities es ON es.id = r.source_id
+        JOIN entities et ON et.id = r.target_id
+        WHERE r.source_id IN (${placeholders})
+        OR r.target_id IN (${placeholders})
       `,
 			)
-			.all(...entity_names, ...entity_names) as Array<{
+			.all(...ids, ...ids) as Array<{
 			from_entity: string;
 			to_entity: string;
 			relation_type: string;
