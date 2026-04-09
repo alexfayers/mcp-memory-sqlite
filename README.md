@@ -1,5 +1,7 @@
 # mcp-memory-sqlite
 
+> **This repository has been superseded by [alexfayers/mcp-memory](https://github.com/alexfayers/mcp-memory)**, a full rewrite in Python. This TypeScript version is no longer maintained.
+
 A personal knowledge graph and memory system for AI assistants using
 SQLite with FTS5 full-text search. Perfect for giving Claude (or any
 MCP-compatible AI) persistent memory across conversations!
